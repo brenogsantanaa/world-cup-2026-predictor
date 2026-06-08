@@ -71,7 +71,9 @@ def load_model_table(processed_dir=PROCESSED_DIR) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
-def prepare(table: pd.DataFrame, features: list[str]) -> pd.DataFrame:
+def prepare(
+    table: pd.DataFrame, features: list[str], carry: tuple[str, ...] = ()
+) -> pd.DataFrame:
     """Select features + target and make them model-ready (no NaNs).
 
     - ``neutral`` becomes 0/1.
@@ -80,6 +82,9 @@ def prepare(table: pd.DataFrame, features: list[str]) -> pd.DataFrame:
       first meeting from an established rivalry.
     - rows still missing form/rest features (a team's first few ever matches) are
       dropped, since those features are genuinely undefined.
+
+    ``carry`` lists extra columns to keep for slicing/reporting (e.g.
+    ``is_world_cup``) without using them as model inputs.
     """
     df = table.copy()
     if "neutral" in features:
@@ -87,7 +92,7 @@ def prepare(table: pd.DataFrame, features: list[str]) -> pd.DataFrame:
     if "h2h_home_win_rate" in features:
         df["h2h_home_win_rate"] = df["h2h_home_win_rate"].fillna(0.5)
 
-    keep = features + [TARGET, "date"]
+    keep = list(dict.fromkeys(features + [TARGET, "date", *carry]))
     df = df[keep].dropna(subset=features + [TARGET]).reset_index(drop=True)
     return df
 
@@ -107,7 +112,7 @@ def _fit_predict(train: pd.DataFrame, test: pd.DataFrame, features: list[str]):
 def run(test_fraction: float = 0.2, save: bool = True) -> dict:
     table = load_model_table()
 
-    full = prepare(table, FULL_FEATURES)
+    full = prepare(table, FULL_FEATURES, carry=("is_world_cup",))
     train, test = chronological_split(full, date_column="date", test_fraction=test_fraction)
 
     y_train, y_test = train[TARGET], test[TARGET]
@@ -123,6 +128,8 @@ def run(test_fraction: float = 0.2, save: bool = True) -> dict:
     _print_report(train, test, baseline_ll, elo_metrics, full_metrics)
     _print_calibration(y_test, full_proba)
 
+    slice_results = _evaluate_slices(train, test, full_proba)
+
     if save:
         import joblib
 
@@ -134,7 +141,59 @@ def run(test_fraction: float = 0.2, save: bool = True) -> dict:
         "no_skill_log_loss": baseline_ll,
         "elo_only": elo_metrics,
         "full": full_metrics,
+        "slices": slice_results,
     }
+
+
+def _evaluate_slices(
+    train: pd.DataFrame, test: pd.DataFrame, full_proba: np.ndarray
+) -> dict:
+    """Report the full model on the slices that matter for the World Cup.
+
+    The global number is dominated by easy, lopsided qualifiers. What we actually
+    care about is performance on **neutral-venue** matches and **World Cup**
+    matches, so we evaluate the same predictions on those held-out subsets.
+    Each slice is compared to its own no-skill baseline (training class rates vs
+    that slice's outcomes), so "is the model adding value *here*" is honest.
+    """
+    y_train = train[TARGET]
+    y_test = test[TARGET].reset_index(drop=True)
+
+    is_neutral = (test["neutral"] == 1).to_numpy()
+    is_wc = test["is_world_cup"].astype(bool).to_numpy()
+    slices = {
+        "all test": np.ones(len(test), dtype=bool),
+        "neutral venue": is_neutral,
+        "world cup (+qual)": is_wc,
+        # Neutral + World Cup approximates the finals themselves (qualifiers are
+        # mostly home/away), i.e. the conditions we ultimately predict.
+        "WC finals~": is_wc & is_neutral,
+    }
+
+    print(f"\n{'=' * 60}\nperformance by slice (full model on held-out test)")
+    print(f"{'slice':<16}{'n':>7}{'no-skill':>11}{'model LL':>11}{'acc':>8}")
+    results: dict[str, dict] = {}
+    for name, mask in slices.items():
+        n = int(mask.sum())
+        if n == 0:
+            continue
+        y_slice = y_test[mask]
+        proba_slice = full_proba[mask]
+        base = no_skill_log_loss(y_train, y_slice, LABELS)
+        metrics = evaluate_probabilities(y_slice, proba_slice, LABELS)
+        results[name] = {"n": n, "no_skill": base, **metrics}
+        print(
+            f"{name:<16}{n:>7,}{base:>11.4f}"
+            f"{metrics['log_loss']:>11.4f}{metrics['accuracy']:>8.1%}"
+        )
+
+    # Calibration specifically on the World Cup slice, our true target.
+    wc_mask = slices["world cup (+qual)"]
+    if wc_mask.sum() >= 50:
+        _print_calibration(
+            y_test[wc_mask], full_proba[wc_mask], bins=5, title="calibration (World Cup slice)"
+        )
+    return results
 
 
 def _print_report(train, test, baseline_ll, elo_metrics, full_metrics) -> None:
@@ -153,14 +212,19 @@ def _print_report(train, test, baseline_ll, elo_metrics, full_metrics) -> None:
     )
 
 
-def _print_calibration(y_test: pd.Series, proba: np.ndarray, bins: int = 10) -> None:
+def _print_calibration(
+    y_test: pd.Series,
+    proba: np.ndarray,
+    bins: int = 10,
+    title: str = "calibration (home-win prob)",
+) -> None:
     """Reliability of the home-win probability: predicted vs actual, by bucket."""
     p_home = proba[:, LABELS.index("H")]
-    actual_home = (y_test.to_numpy() == "H").astype(int)
+    actual_home = (np.asarray(y_test) == "H").astype(int)
     edges = np.linspace(0, 1, bins + 1)
     idx = np.clip(np.digitize(p_home, edges) - 1, 0, bins - 1)
 
-    print(f"\ncalibration (home-win prob):\n  predicted -> actual   (n)")
+    print(f"\n{title}:\n  predicted -> actual   (n)")
     for b in range(bins):
         mask = idx == b
         if mask.sum() == 0:
