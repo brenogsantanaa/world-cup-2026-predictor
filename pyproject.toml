@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sports-predictor"
+version = "0.1.0"
+description = "An end-to-end machine learning project for predicting FIFA World Cup match outcomes and simulating the tournament."
+requires-python = ">=3.12"
+readme = "README.md"
+dependencies = [
+    "pandas",
+    "numpy",
+    "scikit-learn",
+    "xgboost",
+    "pyarrow",
+]
+
+[project.optional-dependencies]
+# NBA was the original scaffolding sport; kept optional so the soccer-focused
+# core install stays lean. Install with: pip install -e ".[nba]"
+nba = ["nba_api"]
+dev = [
+    "jupyter",
+    "matplotlib",
+    "seaborn",
+    "pytest",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

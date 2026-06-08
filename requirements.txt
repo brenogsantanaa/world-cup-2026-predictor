@@ -1,0 +1,15 @@
+# Data handling
+pandas
+numpy
+
+# Machine learning
+scikit-learn
+xgboost
+
+# Notebooks and visualization
+jupyter
+matplotlib
+seaborn
+
+# Testing
+pytest
