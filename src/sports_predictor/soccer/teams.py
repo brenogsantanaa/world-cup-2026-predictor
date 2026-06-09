@@ -78,6 +78,51 @@ def normalize_team_name(name: str) -> str:
     return TEAM_ALIASES.get(cleaned.casefold(), cleaned)
 
 
+# Coarse confederation map, used for honest coverage reporting (not modeling).
+# Covers the regular World Cup / continental contenders; anything not listed is
+# reported as "Unknown" rather than guessed.
+CONFEDERATIONS: dict[str, str] = {
+    # UEFA
+    **{t: "UEFA" for t in [
+        "Germany", "France", "Spain", "Italy", "England", "Netherlands", "Portugal",
+        "Belgium", "Croatia", "Switzerland", "Denmark", "Poland", "Serbia", "Wales",
+        "Sweden", "Austria", "Ukraine", "Czech Republic", "Russia", "Turkey",
+        "Republic of Ireland", "Scotland", "Norway", "Greece", "Romania", "Hungary",
+        "Iceland", "Slovakia", "Slovenia", "Bosnia and Herzegovina", "North Macedonia",
+        "Finland", "Northern Ireland", "Bulgaria", "Albania", "Montenegro",
+    ]},
+    # CONMEBOL
+    **{t: "CONMEBOL" for t in [
+        "Brazil", "Argentina", "Uruguay", "Colombia", "Chile", "Peru", "Ecuador",
+        "Paraguay", "Bolivia", "Venezuela",
+    ]},
+    # CONCACAF
+    **{t: "CONCACAF" for t in [
+        "United States", "Mexico", "Canada", "Costa Rica", "Honduras", "Panama",
+        "Jamaica", "El Salvador", "Trinidad and Tobago", "Haiti",
+    ]},
+    # CAF
+    **{t: "CAF" for t in [
+        "Nigeria", "Senegal", "Cameroon", "Ghana", "Ivory Coast", "Egypt", "Morocco",
+        "Tunisia", "Algeria", "South Africa", "Mali", "DR Congo", "Burkina Faso",
+        "Cape Verde", "Guinea",
+    ]},
+    # AFC
+    **{t: "AFC" for t in [
+        "Japan", "South Korea", "Iran", "Saudi Arabia", "Australia", "Qatar", "Iraq",
+        "United Arab Emirates", "China PR", "Uzbekistan", "Jordan", "Oman", "Bahrain",
+        "North Korea", "Syria",
+    ]},
+    # OFC
+    **{t: "OFC" for t in ["New Zealand", "Fiji", "Tahiti", "New Caledonia"]},
+}
+
+
+def confederation_of(team: str) -> str:
+    """Return the confederation for a (canonical) team, or 'Unknown'."""
+    return CONFEDERATIONS.get(normalize_team_name(team), "Unknown")
+
+
 def find_unmapped_teams(names: object, known: set[str]) -> set[str]:
     """Return the canonical names in ``names`` that are not in ``known``.
 
