@@ -99,9 +99,11 @@ features only.
 - [x] Baseline 3-way match model (logistic regression) + calibration check
 - [x] Knockout-draw conversion (proportional / even split)
 - [x] Monte Carlo tournament simulator + 2022 World Cup backtest
+- [x] XGBoost evaluated — ties logistic, so logistic is retained (the model is
+      not the bottleneck; Elo already captures the signal). See `soccer/models.py`.
+- [ ] Tournament-level calibration (shrinkage) for top-team overconfidence
 - [ ] Goalscorer-derived player signal (`goalscorers.csv`)
 - [ ] FIFA-ranking as-of-match-date features
-- [ ] Stronger model (XGBoost) + tournament-level calibration (shrinkage)
 
 ### Baseline backtest (train ≤2016, test 2016→2026, ~9.8k matches)
 
