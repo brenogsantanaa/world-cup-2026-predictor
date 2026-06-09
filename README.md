@@ -127,8 +127,15 @@ features only.
       **Transfermarkt**, and **FBref**, each built incrementally end-to-end
       (cache → parse → canonical id → one feature) and tested against committed
       sample pages. The same player resolves to one `player_id` across sources.
-- [ ] 2026 World Cup squad lists (link club-stat players to national teams)
-- [ ] Team-match aggregation of player profiles + neutral/WC slice backtest
+- [x] National-team squad assembly (`soccer/squads.py`) — the linchpin mapping
+      `player_id → nation`, so club stats become national-team features. Players
+      not in any squad degrade to NaN + `in_squad=0`.
+- [x] Team-match aggregation of squad profiles + slice-backtest harness
+      (`soccer/squad_features.py`) — leakage-safe aggregation (squad value, top
+      xG/90, share in form) with coverage/`low_data` flags. The backtest is wired
+      and tested but only *runs* on a real as-of feature table (current snapshots
+      would be anachronistic for past matches), so it reports the data
+      prerequisite rather than fabricating a verdict.
 
 #### Multi-source scraping architecture
 
