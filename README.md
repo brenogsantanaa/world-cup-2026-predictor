@@ -44,6 +44,25 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+### Optional: API-Football (live 2026 club data)
+
+For the **forward-looking 2026 prediction** only, club form can be enriched via
+[API-Football](https://www.api-sports.io/). Set your key in the environment
+(never hardcoded):
+
+```bash
+export API_FOOTBALL_KEY="your-key-here"
+```
+
+The client (`soccer/apifootball.py`) is **cache-first** and **quota-aware**: the
+free tier allows ~100 requests/day, so it throttles, backs off on 429s, stops
+cleanly when the daily limit is hit, and is **resumable** — re-running skips
+anything already cached (cache hits don't consume quota), so a full squad pull can
+span several days. All raw JSON is saved verbatim to `data/raw/apifootball/` with a
+provenance manifest. Without the key the client refuses live calls but still parses
+any cached responses. This data is **never** fed into the historical backtest
+(that would be leakage) — only the 2026 forward simulation.
+
 ## Data pipeline
 
 The ingestion contract (see `DATA_SOURCES.md` §4) is always:

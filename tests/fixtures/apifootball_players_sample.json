@@ -1,0 +1,45 @@
+{
+  "get": "players",
+  "parameters": { "league": "61", "season": "2023", "page": "1" },
+  "errors": [],
+  "results": 2,
+  "paging": { "current": 1, "total": 1 },
+  "response": [
+    {
+      "player": {
+        "id": 276,
+        "name": "Kylian Mbappé",
+        "firstname": "Kylian",
+        "lastname": "Mbappé",
+        "age": 27,
+        "nationality": "France"
+      },
+      "statistics": [
+        {
+          "team": { "id": 85, "name": "Paris Saint Germain" },
+          "league": { "id": 61, "name": "Ligue 1", "season": 2023 },
+          "games": { "appearences": 29, "minutes": 2600, "position": "Attacker" },
+          "goals": { "total": 28, "assists": 7 }
+        }
+      ]
+    },
+    {
+      "player": {
+        "id": 99999,
+        "name": "Youngster Reserve",
+        "firstname": "Youngster",
+        "lastname": "Reserve",
+        "age": 19,
+        "nationality": "France"
+      },
+      "statistics": [
+        {
+          "team": { "id": 85, "name": "Paris Saint Germain" },
+          "league": { "id": 61, "name": "Ligue 1", "season": 2023 },
+          "games": { "appearences": 2, "minutes": 80, "position": "Goalkeeper" },
+          "goals": { "total": 0, "assists": 0 }
+        }
+      ]
+    }
+  ]
+}
