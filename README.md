@@ -27,6 +27,10 @@ exist before kickoff.
   evaluation, simulation).
 - `src/sports_predictor/soccer/`: soccer data ingestion, team-name mapping, and
   feature engineering.
+- `src/sports_predictor/canonical/`: cross-source reconciliation — accent-safe
+  name keys, stable `player_id`/`team_id`, per-field conflict resolution.
+- `src/sports_predictor/scrapers/`: one isolated, cache-first parser per site
+  (Understat, Transfermarkt, FBref); fetching is separate from parsing.
 - `src/sports_predictor/nba/`: legacy NBA scaffolding (optional).
 - `models/`: saved trained models.
 - `tests/`: automated checks for the reusable code.
@@ -118,6 +122,25 @@ features only.
       `soccer/fifa_features.py`) — leakage-safe `merge_asof`. **Improves the
       World Cup slice** (−0.0050 log loss), flat on neutral. Off by default only
       because the source ends mid-2018 (no live 2026 coverage). See §13.
+- [x] Broad-data foundation: **canonical reconciliation layer**
+      (`canonical/`) + cache-first scrapers (`scrapers/`) for **Understat**,
+      **Transfermarkt**, and **FBref**, each built incrementally end-to-end
+      (cache → parse → canonical id → one feature) and tested against committed
+      sample pages. The same player resolves to one `player_id` across sources.
+- [ ] 2026 World Cup squad lists (link club-stat players to national teams)
+- [ ] Team-match aggregation of player profiles + neutral/WC slice backtest
+
+#### Multi-source scraping architecture
+
+Each site has an isolated parser so one site's HTML change can't break the
+others. Fetching (`scrapers/base.py`) is cache-first, rate-limited, retried with
+backoff, sends a real User-Agent, and writes a provenance manifest (URL, UTC ts,
+bytes, SHA-256); parsing reads only from cache, so runs are reproducible. Cross-
+source facts are unified by `canonical/` (accent/transliteration-safe name keys,
+deterministic ids, documented per-field source priority with disagreement
+logging). Missing data degrades to NaN + a `low_data` flag — never a fabricated
+zero. ToS note: Transfermarkt and FBref restrict automated access; fetch politely
+and cache aggressively.
 
 ### Baseline backtest (train ≤2016, test 2016→2026, ~9.8k matches)
 
