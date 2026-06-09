@@ -34,6 +34,7 @@ from sklearn.preprocessing import StandardScaler
 
 from sports_predictor.core.paths import PROCESSED_DIR
 from sports_predictor.soccer.baseline import FULL_FEATURES, LABELS, TARGET, prepare
+from sports_predictor.soccer.dixon_coles import DEFAULT_XI, DixonColesModel
 from sports_predictor.soccer.elo import DEFAULT_RATING, compute_elo, expected_score
 from sports_predictor.soccer.features import _team_perspective
 from sports_predictor.soccer.knockout import advance_probabilities
@@ -467,6 +468,38 @@ def _build_simulation_inputs(matches, model_table, tournament, cutoff):
     return make_lookup(pair_probs), states["elo"].to_dict(), n_train
 
 
+def build_pair_probabilities_dc(teams, dc_model: DixonColesModel) -> dict:
+    """Neutral-venue (a-win, draw, b-win) for every pairing from a goal model.
+
+    The Dixon-Coles model is already symmetric on neutral ground (no home term),
+    so unlike the classifier path we do not need to predict both orders and
+    average -- one call per pairing is exact.
+    """
+    pair: dict = {}
+    for a, b in itertools.combinations(sorted(teams), 2):
+        pair[(a, b)] = dc_model.outcome_proba(a, b, neutral=True)
+    return pair
+
+
+def _build_dc_inputs(matches, tournament, cutoff, xi: float = DEFAULT_XI):
+    """Fit Dixon-Coles and assemble (lookup, strength) for a tournament/cutoff.
+
+    Strength (used only for group tie-breaks and the perturbation) is the team's
+    overall rating attack+defense; teams unseen in the fit window fall back to the
+    league-average strength the model already uses.
+    """
+    cutoff_ts = _utc(cutoff)
+    dc = DixonColesModel(xi=xi).fit(matches, cutoff_ts)
+
+    def overall(team: str) -> float:
+        atk, dfn = dc._strength(team)
+        return atk + dfn
+
+    strength = {t: overall(t) for t in tournament.teams}
+    lookup = make_lookup(build_pair_probabilities_dc(tournament.teams, dc))
+    return lookup, strength, dc
+
+
 def run_backtest(
     tournament: Tournament = WC_2022,
     cutoff: str = "2022-11-20",
@@ -499,7 +532,10 @@ def run_backtest(
 # --------------------------------------------------------------------------- #
 WC2026_ODDS_PARQUET = "wc2026_odds.parquet"
 WC2026_ODDS_CSV = "wc2026_odds.csv"
-WC2026_LABEL = "backbone + international features, no club data"
+WC2026_LABELS = {
+    "backbone": "backbone (Elo + form) + international features, no club data",
+    "dixon_coles": "Dixon-Coles goal model (attack/defense, time-decay), no club data",
+}
 
 
 def run_forward(
@@ -509,45 +545,63 @@ def run_forward(
     strength_sigma: float = DEFAULT_STRENGTH_SIGMA,
     seed: int = 0,
     save: bool = True,
+    model_kind: str = "backbone",
 ) -> pd.DataFrame:
     """Predict a real, upcoming tournament (no known result to backtest against).
 
-    Trains the calibrated model on every match before ``cutoff`` and runs the
-    Monte Carlo forward. For 2026 this uses ONLY the team-level backbone + the
-    international-football features; no club data is involved (that enrichment is
-    separate and additive). Saves the odds table to processed parquet + CSV.
-    """
-    matches = pd.read_parquet(PROCESSED_DIR / "matches.parquet")
-    model_table = pd.read_parquet(PROCESSED_DIR / "model_table.parquet")
+    ``model_kind`` selects the engine:
 
-    lookup, strength, n_train = _build_simulation_inputs(matches, model_table, tournament, cutoff)
+    * ``"backbone"``     - the Elo + form/H2H logistic model (original path).
+    * ``"dixon_coles"``  - the bivariate Poisson goal model.
+
+    Either way the run uses no club data (that enrichment is separate and
+    additive). Saves the odds table to processed parquet + CSV, suffixed by model.
+    """
+    if model_kind not in WC2026_LABELS:
+        raise ValueError(f"unknown model_kind {model_kind!r}; use {list(WC2026_LABELS)}")
+
+    matches = pd.read_parquet(PROCESSED_DIR / "matches.parquet")
+
+    if model_kind == "dixon_coles":
+        lookup, strength, dc = _build_dc_inputs(matches, tournament, cutoff)
+        n_train = dc.n_matches
+        extra = f"  gamma={dc.gamma:.3f} rho={dc.rho:.3f}"
+    else:
+        model_table = pd.read_parquet(PROCESSED_DIR / "model_table.parquet")
+        lookup, strength, n_train = _build_simulation_inputs(
+            matches, model_table, tournament, cutoff
+        )
+        extra = ""
+
     table = monte_carlo(
         tournament, lookup, strength, strategy="proportional", n=n, seed=seed,
         strength_sigma=strength_sigma,
     )
 
+    label = WC2026_LABELS[model_kind]
     print(
         f"{tournament.name} forward prediction  (as-of {tournament.as_of}, cutoff "
         f"{cutoff})\n"
+        f"  model: {model_kind}{extra}\n"
         f"  trained on {n_train:,} matches, {n:,} sims, strength_sigma="
         f"{strength_sigma}\n"
-        f"  source: {WC2026_LABEL}\n"
+        f"  source: {label}\n"
     )
     _print_results(table)
 
     if save:
+        suffix = "" if model_kind == "backbone" else f"_{model_kind}"
+        parquet = WC2026_ODDS_PARQUET.replace(".parquet", f"{suffix}.parquet")
+        csv = WC2026_ODDS_CSV.replace(".csv", f"{suffix}.csv")
         export = table.copy()
         export.insert(0, "team", export.index)
         export = export.rename(columns={"win": "champion"})
-        export["source"] = WC2026_LABEL
+        export["source"] = label
         export["as_of"] = tournament.as_of
         export = export.reset_index(drop=True).round(6)
-        export.to_parquet(PROCESSED_DIR / WC2026_ODDS_PARQUET, index=False)
-        export.to_csv(PROCESSED_DIR / WC2026_ODDS_CSV, index=False)
-        print(
-            f"\nsaved: {PROCESSED_DIR / WC2026_ODDS_PARQUET}"
-            f"\n       {PROCESSED_DIR / WC2026_ODDS_CSV}"
-        )
+        export.to_parquet(PROCESSED_DIR / parquet, index=False)
+        export.to_csv(PROCESSED_DIR / csv, index=False)
+        print(f"\nsaved: {PROCESSED_DIR / parquet}\n       {PROCESSED_DIR / csv}")
     return table
 
 
@@ -640,8 +694,11 @@ def _print_strategy_comparison(proportional: pd.DataFrame, even: pd.DataFrame, t
 def _main() -> None:
     import sys
 
-    if len(sys.argv) > 1 and sys.argv[1] == "forward":
-        run_forward()
+    args = sys.argv[1:]
+    if args and args[0] == "forward":
+        # `forward` -> backbone; `forward dc` -> Dixon-Coles goal model.
+        model_kind = "dixon_coles" if len(args) > 1 and args[1] in ("dc", "dixon_coles") else "backbone"
+        run_forward(model_kind=model_kind)
     else:
         run_backtest()
 
