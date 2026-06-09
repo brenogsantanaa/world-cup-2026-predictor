@@ -4,6 +4,7 @@ import numpy as np
 
 from sports_predictor.soccer.simulation import (
     monte_carlo,
+    perturbed_lookup,
     play_tie,
     simulate_group,
     simulate_tournament,
@@ -67,3 +68,43 @@ def test_monte_carlo_probabilities_are_monotone_and_normalized():
 def test_monte_carlo_covers_all_teams():
     table = monte_carlo(WC_2022, coinflip_lookup, STRENGTH, n=50, seed=3)
     assert len(table) == len(WC_2022.teams)
+
+
+# --------------------------------------------------------------------------- #
+# Strength perturbation
+# --------------------------------------------------------------------------- #
+def smooth_lookup(x, y):
+    """A non-degenerate matchup so perturbation has something to shift."""
+    return (0.45, 0.25, 0.30)
+
+
+def test_perturbed_lookup_zero_offset_is_identity():
+    base = smooth_lookup
+    pert = perturbed_lookup(base, {"A": 0.0, "B": 0.0})
+    assert pert("A", "B") == base("A", "B")
+
+
+def test_perturbed_lookup_positive_offset_helps_that_team():
+    pert = perturbed_lookup(smooth_lookup, {"A": 1.0, "B": 0.0})
+    p_a, p_d, p_b = pert("A", "B")
+    base_a, base_d, base_b = smooth_lookup("A", "B")
+    assert p_a > base_a  # A boosted
+    assert p_b < base_b  # B reduced
+    assert abs(p_d - base_d) < 1e-9  # draw probability untouched
+    assert abs((p_a + p_d + p_b) - 1.0) < 1e-9
+
+
+def test_perturbation_softens_the_favorite():
+    # With a strong (but not certain) favorite, injecting rating uncertainty
+    # should lower its title odds toward the field.
+    base = monte_carlo(WC_2022, _soft_favorite_lookup, STRENGTH, n=1500, seed=5, strength_sigma=0.0)
+    perturbed = monte_carlo(WC_2022, _soft_favorite_lookup, STRENGTH, n=1500, seed=5, strength_sigma=0.8)
+    top_team = base["win"].idxmax()
+    assert perturbed.loc[top_team, "win"] < base.loc[top_team, "win"]
+
+
+def _soft_favorite_lookup(x, y):
+    """Stronger team favored but not certain, so perturbation can move odds."""
+    d = (STRENGTH[x] - STRENGTH[y]) / 31.0  # in [-1, 1]
+    p_x = 0.5 + 0.35 * d
+    return (p_x, 0.0, 1.0 - p_x)

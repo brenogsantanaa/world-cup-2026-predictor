@@ -101,7 +101,11 @@ features only.
 - [x] Monte Carlo tournament simulator + 2022 World Cup backtest
 - [x] XGBoost evaluated — ties logistic, so logistic is retained (the model is
       not the bottleneck; Elo already captures the signal). See `soccer/models.py`.
-- [ ] Tournament-level calibration (shrinkage) for top-team overconfidence
+- [x] Tournament-level calibration. Per-match probabilities are already calibrated
+      (optimal temperature ≈ 1 on every slice), so the tournament overconfidence is
+      *structural*. Added per-simulation **team strength-uncertainty perturbation**
+      (`strength_sigma`) and calibrated it over the 2010–2022 World Cups by champion
+      log loss. See `core/calibration.py`, `soccer/simulation.py`, PROJECT_REPORT.md.
 - [ ] Goalscorer-derived player signal (`goalscorers.csv`)
 - [ ] FIFA-ranking as-of-match-date features
 
