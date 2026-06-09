@@ -452,3 +452,44 @@ gain on the World Cup slice so far, despite 29.5% of WC matches having no rankin
 the source ends mid-2018, so for the live 2026 product there would be *no*
 ranking at all. The WC-slice gain says it's worth enabling the moment a current
 FIFA-ranking source is wired in. Adds `test_soccer_fifa.py`. Suite: **74 passing**.
+
+---
+
+## 14. Update — broad multi-source data build (canonical layer + scrapers)
+
+Built incrementally (one green commit per slice) into a foundation for unifying
+CC0 data with scraped club/squad data.
+
+**Canonical reconciliation layer** (`canonical/`) — the core. Accent/
+transliteration-safe match keys (`names.py`: Mbappé→mbappe, N'Golo→ngolo,
+"Last, First" swaps); deterministic, reproducible `player_id`/`team_id` with alias
+merging and *safe* non-merge of abbreviated names (`registry.py`); documented
+per-field source priority (FBref→match stats, Understat→xG, Transfermarkt→value)
+with disagreement **logging** rather than silent overwrites (`conflicts.py`).
+
+**Scrapers** (`scrapers/`) — one isolated parser per site, fetching fully separated
+from parsing. `base.py` is cache-first (re-runs never re-hit a site), rate-limited,
+retried with backoff, sends a real User-Agent, and writes a provenance manifest
+(URL, UTC ts, bytes, SHA-256). Three sites, each end-to-end (cache→parse→canonical
+→one feature): **Understat** (embedded JSON incl. `\xNN`/accents), **Transfermarkt**
+(nested squad tables via BeautifulSoup, market-value m/k/bn parsing), **FBref**
+(tables hidden in HTML comments, cells by `data-stat`). A test proves the *same*
+player resolves to one `player_id` across FBref and Transfermarkt.
+
+**Squad assembly** (`soccer/squads.py`) — the linchpin: `player_id → nation` from
+national-team squad pages, so club stats attach to countries. Players outside every
+squad get NaN + `in_squad=0`; squad value sums only *known* values with coverage +
+`low_data` flags.
+
+**Team-match aggregation + backtest harness** (`soccer/squad_features.py`) —
+leakage-safe per-nation aggregates (squad value, top xG/90, mean-top-N, share in
+form) attached to matches as home/away/diff features with `low_data`. The harness
+deliberately **refuses to fabricate a backtest verdict from a current snapshot**
+(anachronistic for past matches); it runs only against a real *as-of* feature
+table and otherwise prints the data prerequisite.
+
+**Live-fetch reality:** an actual Understat pull from the build environment returned
+a stripped page without inline data, and Transfermarkt/FBref are Cloudflare-
+protected. The cache-first, fixture-tested design means parsing/tests/architecture
+are unaffected and ready to run the moment real pages are cached. All parsers are
+verified against committed sample pages. Suite: **125 passing**.
