@@ -114,7 +114,10 @@ features only.
       CONMEBOL is **not** overrated (UEFA well-calibrated); the weaker pools
       (OFC/AFC/CONCACAF) are, but correcting it doesn't generalise to World Cup
       predictions, so it's left out. See PROJECT_REPORT.md §12.
-- [ ] FIFA-ranking as-of-match-date features
+- [x] FIFA-ranking as-of-match-date features (`soccer/fifa_ranking.py`,
+      `soccer/fifa_features.py`) — leakage-safe `merge_asof`. **Improves the
+      World Cup slice** (−0.0050 log loss), flat on neutral. Off by default only
+      because the source ends mid-2018 (no live 2026 coverage). See §13.
 
 ### Baseline backtest (train ≤2016, test 2016→2026, ~9.8k matches)
 
