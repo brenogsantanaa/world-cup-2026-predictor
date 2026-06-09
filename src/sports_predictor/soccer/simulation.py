@@ -42,6 +42,7 @@ from sports_predictor.soccer.tournaments import (
     WC_2014,
     WC_2018,
     WC_2022,
+    WC_2026,
     Tournament,
 )
 
@@ -239,8 +240,8 @@ def _sample_outcome(probs, u: float) -> int:
     return 2
 
 
-def simulate_group(teams, lookup, strength, rng) -> tuple[str, str]:
-    """Round-robin a group; return (winner, runner-up).
+def simulate_group_ranked(teams, lookup, strength, rng) -> tuple[list[str], dict[str, int]]:
+    """Round-robin a group; return (teams ranked best-first, points by team).
 
     Tie-breaking simplification: real World Cup tiebreakers use goal difference
     and goals scored, which need a scoreline model we do not have yet. Here ties
@@ -259,6 +260,12 @@ def simulate_group(teams, lookup, strength, rng) -> tuple[str, str]:
             points[y] += 3
 
     ranked = sorted(teams, key=lambda t: (points[t], strength[t], rng.random()), reverse=True)
+    return ranked, points
+
+
+def simulate_group(teams, lookup, strength, rng) -> tuple[str, str]:
+    """Round-robin a group; return (winner, runner-up)."""
+    ranked, _ = simulate_group_ranked(teams, lookup, strength, rng)
     return ranked[0], ranked[1]
 
 
@@ -271,6 +278,12 @@ def play_tie(x, y, lookup, strategy, rng) -> str:
 
 def simulate_tournament(tournament, lookup, strength, strategy, rng) -> dict:
     """Play one full tournament; return furthest round reached per team."""
+    if tournament.is_48:
+        return _simulate_48(tournament, lookup, strength, strategy, rng)
+    return _simulate_32(tournament, lookup, strength, strategy, rng)
+
+
+def _simulate_32(tournament, lookup, strength, strategy, rng) -> dict:
     qualifiers: dict = {}
     reached: dict[str, str] = {}
     for group, teams in tournament.groups.items():
@@ -292,11 +305,97 @@ def simulate_tournament(tournament, lookup, strength, strategy, rng) -> dict:
     return reached
 
 
+# Labels assigned to the WINNER of each 48-team knockout round (R32 onward); the
+# 32 qualifiers start at "R32". Length = len(bracket) + 1.
+_LABELS_48 = ["R16", "QF", "SF", "Final", "Champion"]
+
+
+def _assign_thirds(best, tournament, rng) -> dict[int, str]:
+    """Assign the best third-placed teams to the R32 third-slots.
+
+    ``best`` is the qualifying thirds, already ordered best-first, as
+    ``(points, strength, group, team)``. We seed them into the third-slots in
+    bracket order, skipping a slot whose host-group winner is from the same group
+    (FIFA never lets a group winner face their own group's third). This is a
+    transparent stand-in for FIFA's full 495-case combination table and only
+    affects R32 pairings. Returns ``{r32_index: team}``.
+    """
+    host_group = {}
+    for idx in tournament.third_place_slots:
+        slot_a, slot_b = tournament.r32[idx]
+        host = slot_a if slot_a[0] == "W" else slot_b
+        host_group[idx] = host[1]
+
+    available = [(group, team) for _, _, group, team in best]
+    assign: dict[int, str] = {}
+    for idx in tournament.third_place_slots:
+        pick = next(
+            (i for i, (g, _) in enumerate(available) if g != host_group[idx]),
+            0 if available else None,
+        )
+        if pick is None:
+            continue
+        _, team = available.pop(pick)
+        assign[idx] = team
+    return assign
+
+
+def _resolve_slot(slot, qualifiers, third_assign, idx):
+    kind = slot[0]
+    if kind == "W":
+        return qualifiers[(slot[1], 1)]
+    if kind == "R":
+        return qualifiers[(slot[1], 2)]
+    return third_assign[idx]  # "3"
+
+
+def _simulate_48(tournament, lookup, strength, strategy, rng) -> dict:
+    reached: dict[str, str] = {}
+    qualifiers: dict = {}
+    thirds = []
+    for group, teams in tournament.groups.items():
+        ranked, points = simulate_group_ranked(teams, lookup, strength, rng)
+        qualifiers[(group, 1)] = ranked[0]
+        qualifiers[(group, 2)] = ranked[1]
+        reached[ranked[0]] = "R32"
+        reached[ranked[1]] = "R32"
+        thirds.append((points[ranked[2]], strength[ranked[2]], group, ranked[2]))
+
+    best = sorted(thirds, key=lambda x: (x[0], x[1], rng.random()), reverse=True)[: tournament.n_thirds]
+    for _, _, _, team in best:
+        reached[team] = "R32"
+    third_assign = _assign_thirds(best, tournament, rng)
+
+    first_ties = [
+        (
+            _resolve_slot(slot_a, qualifiers, third_assign, idx),
+            _resolve_slot(slot_b, qualifiers, third_assign, idx),
+        )
+        for idx, (slot_a, slot_b) in enumerate(tournament.r32)
+    ]
+
+    winners = [play_tie(x, y, lookup, strategy, rng) for x, y in first_ties]
+    for w in winners:
+        reached[w] = _LABELS_48[0]
+    prev = winners
+    for ri, round_conn in enumerate(tournament.bracket):
+        prev = [play_tie(prev[i], prev[j], lookup, strategy, rng) for i, j in round_conn]
+        for w in prev:
+            reached[w] = _LABELS_48[ri + 1]
+
+    return reached
+
+
 # --------------------------------------------------------------------------- #
 # 4. Monte Carlo
 # --------------------------------------------------------------------------- #
 # Each round implies all earlier ones (a finalist also reached the SF, etc.).
 _ROUND_ORDER = ["R16", "QF", "SF", "Final", "Champion"]
+_ROUND_ORDER_48 = ["R32", "R16", "QF", "SF", "Final", "Champion"]
+
+
+def _round_order(tournament) -> list[str]:
+    return _ROUND_ORDER_48 if tournament.is_48 else _ROUND_ORDER
 
 
 def monte_carlo(
@@ -318,6 +417,7 @@ def monte_carlo(
     rng = np.random.default_rng(seed)
     counts = {team: Counter() for team in tournament.teams}
     teams = tournament.teams
+    round_order = _round_order(tournament)
 
     for _ in range(n):
         if strength_sigma > 0:
@@ -327,17 +427,14 @@ def monte_carlo(
             sim_lookup = lookup
         reached = simulate_tournament(tournament, sim_lookup, strength, strategy, rng)
         for team, furthest in reached.items():
-            depth = _ROUND_ORDER.index(furthest)
-            for r in _ROUND_ORDER[: depth + 1]:
+            depth = round_order.index(furthest)
+            for r in round_order[: depth + 1]:
                 counts[team][r] += 1
 
     table = pd.DataFrame(
-        {
-            team: {r: counts[team][r] / n for r in _ROUND_ORDER}
-            for team in tournament.teams
-        }
+        {team: {r: counts[team][r] / n for r in round_order} for team in teams}
     ).T
-    table.columns = ["reach_R16", "reach_QF", "reach_SF", "reach_Final", "win"]
+    table.columns = [f"reach_{r}" for r in round_order[:-1]] + ["win"]
     return table.sort_values("win", ascending=False)
 
 
@@ -395,6 +492,63 @@ def run_backtest(
     _print_results(results["proportional"])
     _print_strategy_comparison(results["proportional"], results["even"])
     return results
+
+
+# --------------------------------------------------------------------------- #
+# 5b. Forward prediction (a real, not backtested, tournament)
+# --------------------------------------------------------------------------- #
+WC2026_ODDS_PARQUET = "wc2026_odds.parquet"
+WC2026_ODDS_CSV = "wc2026_odds.csv"
+WC2026_LABEL = "backbone + international features, no club data"
+
+
+def run_forward(
+    tournament: Tournament = WC_2026,
+    cutoff: str = "2026-06-11",
+    n: int = 20000,
+    strength_sigma: float = DEFAULT_STRENGTH_SIGMA,
+    seed: int = 0,
+    save: bool = True,
+) -> pd.DataFrame:
+    """Predict a real, upcoming tournament (no known result to backtest against).
+
+    Trains the calibrated model on every match before ``cutoff`` and runs the
+    Monte Carlo forward. For 2026 this uses ONLY the team-level backbone + the
+    international-football features; no club data is involved (that enrichment is
+    separate and additive). Saves the odds table to processed parquet + CSV.
+    """
+    matches = pd.read_parquet(PROCESSED_DIR / "matches.parquet")
+    model_table = pd.read_parquet(PROCESSED_DIR / "model_table.parquet")
+
+    lookup, strength, n_train = _build_simulation_inputs(matches, model_table, tournament, cutoff)
+    table = monte_carlo(
+        tournament, lookup, strength, strategy="proportional", n=n, seed=seed,
+        strength_sigma=strength_sigma,
+    )
+
+    print(
+        f"{tournament.name} forward prediction  (as-of {tournament.as_of}, cutoff "
+        f"{cutoff})\n"
+        f"  trained on {n_train:,} matches, {n:,} sims, strength_sigma="
+        f"{strength_sigma}\n"
+        f"  source: {WC2026_LABEL}\n"
+    )
+    _print_results(table)
+
+    if save:
+        export = table.copy()
+        export.insert(0, "team", export.index)
+        export = export.rename(columns={"win": "champion"})
+        export["source"] = WC2026_LABEL
+        export["as_of"] = tournament.as_of
+        export = export.reset_index(drop=True).round(6)
+        export.to_parquet(PROCESSED_DIR / WC2026_ODDS_PARQUET, index=False)
+        export.to_csv(PROCESSED_DIR / WC2026_ODDS_CSV, index=False)
+        print(
+            f"\nsaved: {PROCESSED_DIR / WC2026_ODDS_PARQUET}"
+            f"\n       {PROCESSED_DIR / WC2026_ODDS_CSV}"
+        )
+    return table
 
 
 # --------------------------------------------------------------------------- #
@@ -484,7 +638,12 @@ def _print_strategy_comparison(proportional: pd.DataFrame, even: pd.DataFrame, t
 
 
 def _main() -> None:
-    run_backtest()
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "forward":
+        run_forward()
+    else:
+        run_backtest()
 
 
 if __name__ == "__main__":

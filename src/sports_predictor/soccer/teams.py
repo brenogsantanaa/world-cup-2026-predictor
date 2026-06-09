@@ -42,6 +42,8 @@ TEAM_ALIASES: dict[str, str] = {
     "cote d'ivoire": "Ivory Coast",
     # Cape Verde (FIFA uses "Cabo Verde")
     "cabo verde": "Cape Verde",
+    # Curacao (results dataset uses the cedilla spelling "Curaçao")
+    "curacao": "Curaçao",
     # Turkey (FIFA now uses "Türkiye")
     "türkiye": "Turkey",
     "turkiye": "Turkey",

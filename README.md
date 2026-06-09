@@ -208,3 +208,39 @@ knockout rule is material: the **proportional** split lifts the strongest teams
 since favoring the favorite compounds across rounds. Known limitation: the very
 top teams are somewhat overconfident (Elo-driven), which tournament-level
 calibration/shrinkage should address.
+
+## 2026 World Cup prediction (first real, forward-looking run)
+
+The real thing: the **48-team 2026 World Cup** (12 groups, top two + eight best
+third-placed teams → Round of 32 → R16 → QF → SF → Final), with the actual final
+draw (as-of 2026-04-23, play-offs resolved) and FIFA's published bracket wiring
+encoded in `soccer/tournaments.py`. Run it:
+
+```bash
+python -m sports_predictor.soccer.simulation forward
+```
+
+This trains on every international before the 11 Jun 2026 cutoff and simulates the
+tournament 20,000 times, writing `data/processed/wc2026_odds.parquet` and a clean
+`wc2026_odds.csv`. **Source: backbone + international features, no club data.**
+
+| team | champion | final | semi | R16 |
+|---|---|---|---|---|
+| Spain | 27.7% | 41.2% | 54.4% | 81.3% |
+| Argentina | 22.9% | 35.8% | 49.2% | 74.6% |
+| France | 8.3% | 15.7% | 31.1% | 70.9% |
+| England | 7.8% | 16.0% | 30.4% | 74.9% |
+| Brazil | 5.4% | 11.4% | 24.0% | 62.5% |
+| Colombia | 4.0% | 9.3% | 17.9% | 65.9% |
+| Portugal | 3.3% | 8.2% | 16.1% | 63.3% |
+| Ecuador | 3.0% | 7.3% | 18.0% | 60.7% |
+| Netherlands | 2.7% | 6.5% | 16.5% | 53.2% |
+| Belgium | 2.1% | 5.5% | 11.8% | 60.5% |
+
+Reigning Euro champion Spain and World Cup holder Argentina head the field, with
+France/England close behind — consistent with market consensus. **Caveat:** the
+exact FIFA third-place combination table (which group's third fills which R32
+slot, 1 of 495 cases) is approximated by seeding the best thirds with same-group
+avoidance; this only shifts R32 matchups and is a documented, easy-to-revise
+choice. Club-data enrichment (API-Football) is additive and will be reported as a
+separate with/without comparison.
