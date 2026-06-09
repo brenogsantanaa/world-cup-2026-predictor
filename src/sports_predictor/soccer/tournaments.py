@@ -29,6 +29,20 @@ class Tournament:
         return [team for group in self.groups.values() for team in group]
 
 
+# The 32-team Round-of-16 slot template has been the same since 1998, so all the
+# 32-team World Cups below reuse it; only the group compositions differ.
+_R16_32 = [
+    (("A", 1), ("B", 2)),
+    (("C", 1), ("D", 2)),
+    (("E", 1), ("F", 2)),
+    (("G", 1), ("H", 2)),
+    (("B", 1), ("A", 2)),
+    (("D", 1), ("C", 2)),
+    (("F", 1), ("E", 2)),
+    (("H", 1), ("G", 2)),
+]
+
+
 WC_2022 = Tournament(
     name="2022 FIFA World Cup",
     groups={
@@ -41,15 +55,50 @@ WC_2022 = Tournament(
         "G": ["Brazil", "Serbia", "Switzerland", "Cameroon"],
         "H": ["Portugal", "Ghana", "Uruguay", "South Korea"],
     },
-    # Ordered so sequential pairing of winners rebuilds the real bracket.
-    r16=[
-        (("A", 1), ("B", 2)),
-        (("C", 1), ("D", 2)),
-        (("E", 1), ("F", 2)),
-        (("G", 1), ("H", 2)),
-        (("B", 1), ("A", 2)),
-        (("D", 1), ("C", 2)),
-        (("F", 1), ("E", 2)),
-        (("H", 1), ("G", 2)),
-    ],
+    r16=_R16_32,
+)
+
+WC_2018 = Tournament(
+    name="2018 FIFA World Cup",
+    groups={
+        "A": ["Russia", "Saudi Arabia", "Egypt", "Uruguay"],
+        "B": ["Portugal", "Spain", "Morocco", "Iran"],
+        "C": ["France", "Australia", "Peru", "Denmark"],
+        "D": ["Argentina", "Iceland", "Croatia", "Nigeria"],
+        "E": ["Brazil", "Switzerland", "Costa Rica", "Serbia"],
+        "F": ["Germany", "Mexico", "Sweden", "South Korea"],
+        "G": ["Belgium", "Panama", "Tunisia", "England"],
+        "H": ["Poland", "Senegal", "Colombia", "Japan"],
+    },
+    r16=_R16_32,
+)
+
+WC_2014 = Tournament(
+    name="2014 FIFA World Cup",
+    groups={
+        "A": ["Brazil", "Croatia", "Mexico", "Cameroon"],
+        "B": ["Spain", "Netherlands", "Chile", "Australia"],
+        "C": ["Colombia", "Greece", "Ivory Coast", "Japan"],
+        "D": ["Uruguay", "Costa Rica", "England", "Italy"],
+        "E": ["Switzerland", "Ecuador", "France", "Honduras"],
+        "F": ["Argentina", "Bosnia and Herzegovina", "Iran", "Nigeria"],
+        "G": ["Germany", "Portugal", "Ghana", "United States"],
+        "H": ["Belgium", "Algeria", "Russia", "South Korea"],
+    },
+    r16=_R16_32,
+)
+
+WC_2010 = Tournament(
+    name="2010 FIFA World Cup",
+    groups={
+        "A": ["South Africa", "Mexico", "Uruguay", "France"],
+        "B": ["Argentina", "Nigeria", "South Korea", "Greece"],
+        "C": ["England", "United States", "Algeria", "Slovenia"],
+        "D": ["Germany", "Australia", "Serbia", "Ghana"],
+        "E": ["Netherlands", "Denmark", "Japan", "Cameroon"],
+        "F": ["Italy", "Paraguay", "New Zealand", "Slovakia"],
+        "G": ["Brazil", "North Korea", "Ivory Coast", "Portugal"],
+        "H": ["Spain", "Switzerland", "Honduras", "Chile"],
+    },
+    r16=_R16_32,
 )

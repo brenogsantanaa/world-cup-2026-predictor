@@ -218,5 +218,77 @@ leakage-safe split -> calibrated baseline, all tested.
 2. Stronger model (XGBoost) + probability-calibration tuning.
 3. Monte Carlo tournament simulation (group advancement, bracket, champion odds).
 
-> Note: the data/model artifacts and `pyproject.toml` exist locally but nothing
-> has been committed to git yet (the repo currently has zero commits).
+---
+
+## 10. Update — model bake-off & tournament-level calibration
+
+### 10.1 Logistic vs XGBoost (it's a tie)
+
+Same chronological backtest, log loss by slice (lower is better):
+
+| model | all | neutral | WC finals | acc |
+|---|---|---|---|---|
+| no-skill | 1.0525 | 1.0962 | 1.1068 | — |
+| logistic | **0.8712** | **0.9140** | 0.8530 | 59.8% |
+| xgboost | 0.8739 | 0.9156 | **0.8527** | 59.9% |
+
+Differences are noise-level and both models are well calibrated. Elo already
+encodes the signal in a near-linear way, so there are few interactions for trees
+to exploit. **Conclusion: keep logistic** (simpler, equally accurate/calibrated,
+interpretable). The model is not the bottleneck. `MatchClassifier`
+(`soccer/models.py`) keeps both behind one interface; run the bake-off with
+`python -m sports_predictor.soccer.models`.
+
+### 10.2 Why champion odds looked overconfident — and the real fix
+
+The 2022 backtest put Brazil + Argentina ≈ 60% combined (market ≈ 35%). The
+instinct is to "calibrate" the match model, but the diagnosis says otherwise:
+
+| slice | optimal temperature | log loss change |
+|---|---|---|
+| all | 1.01 | none |
+| neutral | 1.00 | none |
+| WC finals | 0.93 | 0.8530 → 0.8521 |
+
+Optimal temperature ≈ 1 everywhere, so **per-match probabilities are already
+calibrated** — naive temperature scaling would do nothing. The tournament
+overconfidence is *structural*: (a) the proportional knockout rule favours the
+favourite by design, and (b) the sim treats each Elo rating as exact, so a
+favourite's 7-game path looks more certain than it is. Markets price in the
+chance a team is simply *overrated* (correlated across all its matches).
+
+**Fix — strength-uncertainty perturbation** (`soccer/simulation.py`): each
+simulation, every team gets one strength offset `~ N(0, sigma)` (logit units)
+applied to *all* its matches, injecting that correlated uncertainty. Temperature
+tooling lives in `core/calibration.py`.
+
+### 10.3 Calibrating sigma over 2010–2022 (and an honest result)
+
+`tune_strength_sigma` scores each sigma by champion log loss `-log P(actual
+winner)` across the four 32-team World Cups:
+
+| sigma | mean champion LL |
+|---|---|
+| 0.00 | 1.962 |
+| **0.20** | **1.950** |
+| 0.40 | 1.956 |
+| 0.60 | 2.024 |
+| 0.80 | 2.102 |
+| 1.00 | 2.160 |
+
+The curve is nearly flat and marginally prefers a **small** sigma. Effect on the
+2022 top-2 combined: σ=0 → 60.0%, σ=0.2 → 59.3%, σ=0.5 → 53.3%, σ=0.8 → 45.7%.
+So matching the market would need σ≈0.8, but **the outcome data rejects that** —
+favourites usually do win (3 of these 4 champions were top-rated), so heavy
+softening hurts. We therefore set a **mild humility prior `DEFAULT_STRENGTH_SIGMA
+= 0.2`** rather than chasing bookmaker spreads.
+
+Caveat: only four tournaments exist, so this is a low-power estimate — a sensible
+default, not a precise optimum. More history (and the 2026 bracket) will sharpen
+it.
+
+### 10.4 Test count
+
+Suite is now **60 passing** (added `test_soccer_models.py`,
+`test_core_calibration.py`, and strength-perturbation tests in
+`test_soccer_simulation.py`). Work is committed in logical units.
