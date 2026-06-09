@@ -97,10 +97,11 @@ features only.
 - [x] Elo as-of-match-date features (own computation, validated vs eloratings.net)
 - [x] Recent-form / rest-days / head-to-head features
 - [x] Baseline 3-way match model (logistic regression) + calibration check
+- [x] Knockout-draw conversion (proportional / even split)
+- [x] Monte Carlo tournament simulator + 2022 World Cup backtest
 - [ ] Goalscorer-derived player signal (`goalscorers.csv`)
 - [ ] FIFA-ranking as-of-match-date features
-- [ ] Stronger model (XGBoost) + probability calibration tuning
-- [ ] Monte Carlo tournament simulation
+- [ ] Stronger model (XGBoost) + tournament-level calibration (shrinkage)
 
 ### Baseline backtest (train ≤2016, test 2016→2026, ~9.8k matches)
 
@@ -115,3 +116,30 @@ calibrated** — across home-win probability buckets, predicted ≈ actual (e.g.
 "55%" bucket wins 52%, the "85%" bucket wins 83%). Good calibration is exactly
 what the tournament simulator will need, and it's strong evidence there's no
 leakage. Run it with `python -m sports_predictor.soccer.baseline`.
+
+## Tournament simulation
+
+`python -m sports_predictor.soccer.simulation` runs a Monte Carlo simulation
+(`soccer/simulation.py`). It freezes each team's strength as of a cutoff date,
+precomputes a neutral-venue 3-way probability for every pairing (predicted both
+ways and averaged), then plays the group stage and knockout bracket thousands of
+times. Knockout ties use the draw-conversion rule from `soccer/knockout.py`.
+
+**2022 World Cup backtest** (train on the 45,400 matches before kickoff, 20k sims,
+proportional rule) — top champion odds:
+
+| team | champion | reach final | reach semi |
+|---|---|---|---|
+| Brazil | 32% | 43% | 63% |
+| Argentina | 28% | 39% | 62% |
+| France | 6% | 17% | 33% |
+| Spain | 6% | 13% | 25% |
+| Portugal | 5% | 15% | 26% |
+
+The top favorites match the pre-tournament market consensus, and the eventual
+winner (Argentina) and runner-up (France) both land in the top three. The
+knockout rule is material: the **proportional** split lifts the strongest teams
+(Brazil +7.5pp, Argentina +6.1pp champion odds vs the **even** 50/50 split),
+since favoring the favorite compounds across rounds. Known limitation: the very
+top teams are somewhat overconfident (Elo-driven), which tournament-level
+calibration/shrinkage should address.
