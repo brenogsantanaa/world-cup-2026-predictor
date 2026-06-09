@@ -292,3 +292,80 @@ it.
 Suite is now **60 passing** (added `test_soccer_models.py`,
 `test_core_calibration.py`, and strength-perturbation tests in
 `test_soccer_simulation.py`). Work is committed in logical units.
+
+---
+
+## 11. Update — player-profile feature layer (Phase B)
+
+Built an **additive** player signal from `goalscorers.csv` (same martj42 repo /
+CC0 license as results), following the existing conventions: raw cache +
+provenance manifest, cleaning separate from raw, leakage-safe features, tests.
+
+### 11.1 Ingestion (`soccer/goalscorers.py`)
+
+Fetch → verbatim raw snapshot (`goalscorers_<asof>.csv` + SHA-256 manifest) →
+`clean` → `goalscorers.parquet`. 47,601 goals (1916–2026), 15,334 distinct
+scorers, 922 own goals, 3,249 penalties. Team names canonicalized via the shared
+`teams.py` map; own goals are kept in the raw table but excluded from player
+credit downstream.
+
+### 11.2 What is (and isn't) derivable
+
+The source records **goals, not appearances** (no lineups), so a true
+"goals per appearance" can't be computed without inventing a denominator — we
+deliberately don't. What the goal stream *does* give, per team and as-of each
+match (`soccer/player_features.py`):
+
+| feature | meaning |
+|---|---|
+| `recent_goals` | goals in the team's last 20 matches |
+| `top_scorer_goals` | most by any single player in that window (star presence) |
+| `goal_concentration` | HHI of goals across scorers (1 = one-man team) |
+| `penalty_share` | fraction of those goals from penalties |
+| `squad_experience` | summed career intl goals (as-of date) of the window's scorers |
+
+**Leakage safety:** one global chronological pass; a match's features are read
+*before* its own goals are folded into the windows / career totals.
+
+**Graceful degradation:** no goals in window → NaN + `low_data = 1` (never a
+fabricated zero); some but `< 3` → values emitted but still flagged. Callers
+impute NaNs from *training* statistics and keep the flag, so low-data teams still
+work off the team backbone alone.
+
+### 11.3 Coverage (honest)
+
+Share of matches with an empty/unreliable home profile:
+
+| scope | low-data rate |
+|---|---|
+| all matches | 31.3% |
+| **World Cup matches** | **13.0%** |
+
+By home confederation: CONMEBOL 6.5%, UEFA 15.5%, CAF 20.5%, CONCACAF 21.0%,
+AFC 27.1%, OFC 35.7%, Unknown 50.7% — coverage is good exactly where we care
+(major nations, World Cups) and thin for obscure fixtures.
+
+### 11.4 Does it help? No — and that's the finding
+
+Backbone (Elo/form/rest/H2H) vs backbone + player, log loss by slice:
+
+| model | all | neutral | WC finals |
+|---|---|---|---|
+| no-skill | 1.0525 | 1.0962 | 1.1068 |
+| backbone | 0.8712 | 0.9140 | **0.8530** |
+| backbone + player | 0.8710 | 0.9137 | 0.8566 |
+
+Delta on the slices that matter: neutral −0.0004 (negligible), WC finals **+0.0036
+(worse)**. The player profiles overlap with team form/Elo (a team that scores a
+lot already shows strong form), so on the small WC slice they add noise.
+
+**Verdict (per the spec): leave the player layer OFF by default.** The pipeline,
+parquet, coverage report and tests remain so it can be revisited (e.g. with real
+lineups/appearances, or opponent-adjusted finishing) — but we don't ship a
+feature that doesn't earn its place.
+
+### 11.5 Tests & count
+
+Added `test_soccer_player_features.py` (leakage / future goals don't leak; first
+appearance is empty not zero; aggregation preserves rows & ids; never-scored team
+→ NaN not zero; own goals not credited). Full suite: **66 passing**.

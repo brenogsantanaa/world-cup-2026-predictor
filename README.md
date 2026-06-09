@@ -106,7 +106,10 @@ features only.
       *structural*. Added per-simulation **team strength-uncertainty perturbation**
       (`strength_sigma`) and calibrated it over the 2010–2022 World Cups by champion
       log loss. See `core/calibration.py`, `soccer/simulation.py`, PROJECT_REPORT.md.
-- [ ] Goalscorer-derived player signal (`goalscorers.csv`)
+- [x] Goalscorer-derived player signal (`goalscorers.csv`) — ingested + a
+      leakage-safe player-profile layer (`soccer/player_features.py`). Honest
+      backtest verdict: it does **not** improve the neutral/WC slices (overlaps
+      with team form/Elo), so it's **off by default**. See PROJECT_REPORT.md §11.
 - [ ] FIFA-ranking as-of-match-date features
 
 ### Baseline backtest (train ≤2016, test 2016→2026, ~9.8k matches)
