@@ -110,6 +110,10 @@ features only.
       leakage-safe player-profile layer (`soccer/player_features.py`). Honest
       backtest verdict: it does **not** improve the neutral/WC slices (overlaps
       with team form/Elo), so it's **off by default**. See PROJECT_REPORT.md §11.
+- [x] Cross-confederation Elo bias check (`soccer/confederation_bias.py`) —
+      CONMEBOL is **not** overrated (UEFA well-calibrated); the weaker pools
+      (OFC/AFC/CONCACAF) are, but correcting it doesn't generalise to World Cup
+      predictions, so it's left out. See PROJECT_REPORT.md §12.
 - [ ] FIFA-ranking as-of-match-date features
 
 ### Baseline backtest (train ≤2016, test 2016→2026, ~9.8k matches)

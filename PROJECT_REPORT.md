@@ -369,3 +369,53 @@ feature that doesn't earn its place.
 Added `test_soccer_player_features.py` (leakage / future goals don't leak; first
 appearance is empty not zero; aggregation preserves rows & ids; never-scored team
 → NaN not zero; own goals not credited). Full suite: **66 passing**.
+
+---
+
+## 12. Update — cross-confederation Elo bias check
+
+**Hypothesis:** our Elo is a near-closed system per confederation (teams mostly
+play within their own pool), so a confederation could hoard rating and look strong
+on paper. We suspected CONMEBOL was overrated, inflating Brazil/Argentina.
+
+**Method (`soccer/confederation_bias.py`):** on inter-confederation matches only,
+compare each side's actual score (W/D/L = 1/0.5/0) to its neutral-aware,
+pre-match Elo-expected score. Mean residual `actual − expected` per confederation
+is the bias; we also fit additive per-confederation Elo offsets (UEFA = reference)
+that would zero the residuals.
+
+**Result (2002+), residual `actual − expected`:**
+
+| confederation | mean residual | verdict |
+|---|---|---|
+| OFC | −0.129 | overrated |
+| AFC | −0.052 | overrated |
+| CONCACAF | −0.049 | overrated |
+| UEFA | +0.017 | well-calibrated |
+| CONMEBOL | +0.048 | (slightly) underrated |
+| CAF | +0.054 | underrated |
+
+Implied Elo offset vs UEFA: CONMEBOL +16, CAF +12, CONCACAF −55, AFC −61,
+OFC −155. CONMEBOL vs UEFA *at World Cups* (73 matches): actual 0.507 vs expected
+0.537 (−0.030, within noise).
+
+**The hypothesis is rejected.** CONMEBOL is *not* overrated (fair-to-slightly
+underrated; roughly even vs UEFA at World Cups) and UEFA is well-calibrated — so
+Brazil/Argentina's high ratings are essentially **earned**, not a confederation
+artifact. The genuinely overrated pools are the *weaker* ones (OFC/AFC/CONCACAF),
+which farm rating among themselves. Correcting that would, if anything, make
+favourites slightly *stronger*, not weaker — so it does not explain the
+simulator's favourite-heaviness (that was structural, fixed in §10).
+
+**Should we apply a correction?** Out-of-sample test (fit offsets pre-2018, test
+2018+ inter-confed matches): Brier all 0.1451 → 0.1440 (−0.0010, negligible);
+Brier **World Cup 0.1863 → 0.1901 (+0.0038, worse)**. The bias is real in-sample
+but does **not generalise** to better World Cup predictions, so we **do not** wire
+a confederation adjustment into the model. Kept as a diagnostic tool.
+
+Adds `test_soccer_confederation_bias.py`. Full suite: **69 passing**.
+
+> Net theme across §10–12: XGBoost, the player layer, and a confederation
+> correction all failed to beat the Elo+form backbone on the slices that matter.
+> The backbone is strong; the remaining frontier is genuinely new information or
+> the live 2026 product, not more modelling on the same data.
