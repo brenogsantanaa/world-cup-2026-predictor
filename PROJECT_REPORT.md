@@ -419,3 +419,36 @@ Adds `test_soccer_confederation_bias.py`. Full suite: **69 passing**.
 > correction all failed to beat the Elo+form backbone on the slices that matter.
 > The backbone is strong; the remaining frontier is genuinely new information or
 > the live 2026 product, not more modelling on the same data.
+
+---
+
+## 13. Update — FIFA ranking as-of features (first slice win)
+
+The one signal **not** derived from our own match results. Ingested the
+historical official ranking time series (`soccer/fifa_ranking.py`): 57,754 rows,
+286 publication dates, 216 teams, **1993-08 → 2018-06**, with raw cache +
+provenance manifest (upstream "Sudan" double-entries deduped, 39 rows).
+
+Features (`soccer/fifa_features.py`) attach, via leakage-safe `merge_asof`
+(backward, same-day excluded), each team's latest ranking **published strictly
+before kickoff**: `home/away_fifa_rank`, `…_points`, `fifa_rank_diff`,
+`fifa_points_diff`, plus `low_data` flags. Missing → NaN + flag (callers impute
+from training stats), never fabricated.
+
+**Coverage** (no home ranking available): all 43.5%, World Cup 29.5% (the 2022 WC
+is entirely uncovered — source ends 2018). By confederation 31–51%.
+
+**Result — the first feature to help the slice that matters:**
+
+| model | all | neutral | WC finals |
+|---|---|---|---|
+| backbone | 0.8712 | 0.9140 | 0.8530 |
+| backbone + FIFA | 0.8702 | 0.9142 | **0.8479** |
+
+Δ neutral +0.0001 (noise), **Δ WC finals −0.0050** — the biggest single-feature
+gain on the World Cup slice so far, despite 29.5% of WC matches having no ranking.
+
+**Decision:** left **OFF by default** — not because it lacks signal, but because
+the source ends mid-2018, so for the live 2026 product there would be *no*
+ranking at all. The WC-slice gain says it's worth enabling the moment a current
+FIFA-ranking source is wired in. Adds `test_soccer_fifa.py`. Suite: **74 passing**.
