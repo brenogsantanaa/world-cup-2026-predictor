@@ -58,10 +58,16 @@ from sports_predictor.core.splitting import chronological_split
 
 LABELS = ["H", "D", "A"]
 
-# Defaults. ``xi`` is per-day; 0.0005 ~ a 3.8-year half-life, suitable for the
-# sparse international calendar (club football uses faster decay). ``max_age_years``
+# Defaults. ``xi`` is per-day; 0.0008 ~ a 2.4-year half-life, suitable for the
+# sparse international calendar (club football uses faster decay). Chosen by
+# ``simulation.tune_xi``: refit before each 2010-2022 World Cup and scored on the
+# actual finals matches, pooled match log loss bottoms out in a broad, shallow
+# basin from ~0.0005 to ~0.0012 (well below the no-decay and fast-decay extremes),
+# with the minimum at 0.0008. Champion log loss, far noisier with only four data
+# points, marginally prefers 0.0005; the difference is within sampling noise, so
+# we take the higher-power match-LL optimum. See PROJECT_REPORT.md. ``max_age_years``
 # hard-caps how far back the fit looks, bounding compute (decay handles the rest).
-DEFAULT_XI = 0.0005
+DEFAULT_XI = 0.0008
 DEFAULT_MAX_AGE_YEARS = 12.0
 MAX_GOALS = 10  # scoreline grid size for deriving outcome probabilities
 RHO_BOUND = 0.25  # keep the low-score correction in a stable range

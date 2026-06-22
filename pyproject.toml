@@ -21,6 +21,8 @@ dependencies = [
 # NBA was the original scaffolding sport; kept optional so the soccer-focused
 # core install stays lean. Install with: pip install -e ".[nba]"
 nba = ["nba_api"]
+# The Streamlit match-outcome predictor UI. Install with: pip install -e ".[app]"
+app = ["streamlit"]
 dev = [
     "jupyter",
     "matplotlib",

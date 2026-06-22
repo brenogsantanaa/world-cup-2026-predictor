@@ -287,7 +287,36 @@ Caveat: only four tournaments exist, so this is a low-power estimate — a sensi
 default, not a precise optimum. More history (and the 2026 bracket) will sharpen
 it.
 
-### 10.4 Test count
+### 10.4 Calibrating the Dixon-Coles time-decay xi
+
+The goal model weights each historical match by `exp(-xi * age_in_days)`, so `xi`
+sets how fast the past is forgotten. The original `0.0005` (~3.8-year half-life)
+was a reasonable guess; `simulation.tune_xi` replaces it with a backtested value.
+For each candidate `xi` it refits the model strictly before each 2010–2022 World
+Cup and scores it two leakage-safe ways on World Cup matches only:
+
+| xi | half-life | match LL (256 finals) | champion LL (4 WCs) |
+|---|---|---|---|
+| 0.0000 | inf | 1.0242 | 2.723 |
+| 0.0002 | 9.5y | 1.0189 | 2.473 |
+| 0.0005 | 3.8y | 1.0041 | **2.346** |
+| **0.0008** | **2.4y** | **1.0024** | 2.473 |
+| 0.0012 | 1.6y | 1.0032 | 2.470 |
+| 0.0018 | 1.1y | 1.0269 | 2.444 |
+| 0.0026 | 0.7y | 1.0270 | 2.441 |
+
+Match log loss — pooled over every actual finals match, so the higher-power
+signal — bottoms out in a **broad, shallow basin from ~0.0005 to ~0.0012** with
+its minimum at **0.0008**, well below both the no-decay (1.0242) and fast-decay
+(1.0270) extremes. Champion log loss, with only four data points, is far noisier
+and marginally prefers 0.0005; the gap is within sampling noise. We select on the
+match metric and set **`DEFAULT_XI = 0.0008`**.
+
+Honest read: this is a small, well-supported nudge, not a dramatic gain — the main
+finding is that the decay band is right and the extremes are wrong. Caveat as
+above: four tournaments is low power.
+
+### 10.5 Test count
 
 Suite is now **60 passing** (added `test_soccer_models.py`,
 `test_core_calibration.py`, and strength-perturbation tests in
