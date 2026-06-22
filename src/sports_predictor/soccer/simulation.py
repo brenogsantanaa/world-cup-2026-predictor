@@ -500,6 +500,47 @@ def _build_dc_inputs(matches, tournament, cutoff, xi: float = DEFAULT_XI):
     return lookup, strength, dc
 
 
+# Default ensemble weight on the Dixon-Coles goal model; the rest goes to the Elo
+# backbone. The two models have opposite blind spots (Elo is win-based and blind
+# to scoring style; Dixon-Coles is goal-based and skewed by confederation scoring
+# levels), so blending cancels both. 0.5 is an even split; tune later on past WCs.
+DEFAULT_ENSEMBLE_W_DC = 0.5
+
+
+def _build_ensemble_inputs(matches, model_table, tournament, cutoff, w_dc=DEFAULT_ENSEMBLE_W_DC):
+    """Blend the Elo backbone and the Dixon-Coles goal model per pairing.
+
+    Each model produces (a-win, draw, b-win) on neutral ground for every pairing;
+    we take a weighted average and renormalise. ``w_dc`` is the weight on the goal
+    model. Strength (tie-breaks/perturbation) stays the Elo rating.
+    """
+    cutoff_ts = _utc(cutoff)
+    model, n_train = _train_model(model_table, cutoff_ts)
+    states = compute_team_states(matches, cutoff_ts)
+    meet, win_rate = compute_pair_h2h(matches, cutoff_ts, tournament.teams)
+    backbone = build_pair_probabilities(tournament.teams, model, states, meet, win_rate)
+
+    dc = DixonColesModel().fit(matches, cutoff_ts)
+    dc_pairs = build_pair_probabilities_dc(tournament.teams, dc)
+    pair = blend_pair_probabilities(backbone, dc_pairs, w_dc)
+    return make_lookup(pair), states["elo"].to_dict(), n_train, dc
+
+
+def blend_pair_probabilities(backbone: dict, dc_pairs: dict, w_dc: float) -> dict:
+    """Weighted average of two pairwise (win, draw, lose) tables, renormalised.
+
+    ``w_dc`` is the weight on the Dixon-Coles entry, ``1 - w_dc`` on the backbone.
+    Each blended triple is renormalised so it remains a valid probability.
+    """
+    pair: dict = {}
+    for key, b in backbone.items():
+        d = dc_pairs[key]
+        blended = [(1.0 - w_dc) * bi + w_dc * di for bi, di in zip(b, d)]
+        s = sum(blended)
+        pair[key] = tuple(x / s for x in blended)
+    return pair
+
+
 def run_backtest(
     tournament: Tournament = WC_2022,
     cutoff: str = "2022-11-20",
@@ -535,6 +576,7 @@ WC2026_ODDS_CSV = "wc2026_odds.csv"
 WC2026_LABELS = {
     "backbone": "backbone (Elo + form) + international features, no club data",
     "dixon_coles": "Dixon-Coles goal model (attack/defense, time-decay), no club data",
+    "ensemble": "ensemble: Elo backbone + Dixon-Coles goal model (50/50), no club data",
 }
 
 
@@ -566,6 +608,12 @@ def run_forward(
         lookup, strength, dc = _build_dc_inputs(matches, tournament, cutoff)
         n_train = dc.n_matches
         extra = f"  gamma={dc.gamma:.3f} rho={dc.rho:.3f}"
+    elif model_kind == "ensemble":
+        model_table = pd.read_parquet(PROCESSED_DIR / "model_table.parquet")
+        lookup, strength, n_train, dc = _build_ensemble_inputs(
+            matches, model_table, tournament, cutoff
+        )
+        extra = f"  w_dc={DEFAULT_ENSEMBLE_W_DC}"
     else:
         model_table = pd.read_parquet(PROCESSED_DIR / "model_table.parquet")
         lookup, strength, n_train = _build_simulation_inputs(
@@ -672,6 +720,120 @@ def tune_strength_sigma(
     return scores
 
 
+# --------------------------------------------------------------------------- #
+# 6b. Calibrating the Dixon-Coles time-decay (xi) across past World Cups
+# --------------------------------------------------------------------------- #
+# Candidate per-day decay rates. 0 = no decay (all history weighted equally);
+# bigger = forgets the past faster. Half-life in years = ln(2) / xi / 365.25, so
+# this grid spans roughly "no decay" down to a ~0.7-year half-life.
+DC_XI_GRID = (0.0, 0.0002, 0.0005, 0.0008, 0.0012, 0.0018, 0.0026)
+
+
+def _wc_finals_slice(matches: pd.DataFrame, cutoff, days: int = 45) -> pd.DataFrame:
+    """The actual World Cup finals matches in the ``days`` after ``cutoff``.
+
+    Leakage-safe by construction: these all kick off on/after the cutoff, so a
+    model fit strictly before the cutoff has never seen them.
+    """
+    cut = _utc(cutoff)
+    dates = pd.to_datetime(matches["date"])
+    if dates.dt.tz is None:
+        dates = dates.dt.tz_localize("UTC")
+    mask = (
+        (matches["tournament"] == "FIFA World Cup")
+        & (dates >= cut)
+        & (dates <= cut + pd.Timedelta(days=days))
+    )
+    return matches[mask]
+
+
+def tune_xi(
+    xis=DC_XI_GRID,
+    n: int = 4000,
+    world_cups=WORLD_CUPS,
+    seed: int = 0,
+    strength_sigma: float = DEFAULT_STRENGTH_SIGMA,
+    days: int = 45,
+    verbose: bool = True,
+) -> dict:
+    """Pick the Dixon-Coles time-decay ``xi`` by backtesting past World Cups.
+
+    For each candidate ``xi`` we refit the goal model before each World Cup and
+    score it two ways, both measured only on World Cup matches and both
+    leakage-safe (the model never sees the tournament it is judged on):
+
+    * **match log loss** - pooled over every actual finals match of the 2010-2022
+      World Cups (256 matches). This is the higher-power signal and the one we
+      select on; log loss rewards honest probabilities, not just the top pick.
+    * **champion log loss** - ``-log P[actual winner]`` from the Monte Carlo
+      simulation, averaged over the four tournaments. Only four data points, so
+      it is noisy; we report it as a sanity check, not the deciding metric.
+
+    Each ``xi`` is fit once per tournament and reused for both signals. Returns
+    ``{xi: {"match_ll", "champion_ll", "gamma", "rho"}}``.
+
+    Caveat: four tournaments is a small sample. Treat the winner as a
+    well-supported default, not a precise optimum.
+    """
+    from sports_predictor.core.evaluation import evaluate_probabilities
+    from sports_predictor.soccer.dixon_coles import LABELS as DC_LABELS
+
+    matches = pd.read_parquet(PROCESSED_DIR / "matches.parquet")
+    matches = matches.dropna(subset=["home_score", "away_score"]).reset_index(drop=True)
+
+    if verbose:
+        print(
+            "Dixon-Coles xi tuning  (lower log loss = better)\n"
+            f"  scored on {len(world_cups)} World Cups, {n:,} sims each, "
+            f"strength_sigma={strength_sigma}\n"
+            f"{'-' * 64}\n"
+            f"{'xi':>8}{'half-life':>11}{'match LL':>11}{'champ LL':>11}"
+            f"{'gamma':>8}{'rho':>8}"
+        )
+
+    results: dict[float, dict] = {}
+    for xi in xis:
+        ys, ps, champ_losses, gammas, rhos = [], [], [], [], []
+        for tour, cutoff, champ in world_cups:
+            dc = DixonColesModel(xi=xi).fit(matches, cutoff)
+            gammas.append(dc.gamma)
+            rhos.append(dc.rho)
+
+            finals = _wc_finals_slice(matches, cutoff, days)
+            if len(finals):
+                ps.append(dc.predict_proba(finals))
+                ys.append(finals["result"].to_numpy())
+
+            lookup = make_lookup(build_pair_probabilities_dc(tour.teams, dc))
+            strength = {t: sum(dc._strength(t)) for t in tour.teams}
+            table = monte_carlo(
+                tour, lookup, strength, strategy="proportional", n=n, seed=seed,
+                strength_sigma=strength_sigma,
+            )
+            p = max(float(table.loc[champ, "win"]) if champ in table.index else 0.0, 1e-6)
+            champ_losses.append(-np.log(p))
+
+        y_true = pd.Series(np.concatenate(ys))
+        proba = np.concatenate(ps)
+        match_ll = evaluate_probabilities(y_true, proba, DC_LABELS)["log_loss"]
+        champ_ll = float(np.mean(champ_losses))
+        gamma, rho = float(np.mean(gammas)), float(np.mean(rhos))
+        results[xi] = {"match_ll": match_ll, "champion_ll": champ_ll, "gamma": gamma, "rho": rho}
+
+        if verbose:
+            hl = "inf" if xi == 0 else f"{np.log(2) / xi / 365.25:.1f}y"
+            print(f"{xi:>8.4f}{hl:>11}{match_ll:>11.4f}{champ_ll:>11.4f}{gamma:>8.3f}{rho:>8.3f}")
+
+    best = min(results, key=lambda k: results[k]["match_ll"])
+    if verbose:
+        print(
+            f"\nbest xi = {best:.4f}  (match log loss {results[best]['match_ll']:.4f}, "
+            f"half-life {'inf' if best == 0 else f'{np.log(2) / best / 365.25:.1f}y'})\n"
+            f"selected on match log loss; champion log loss shown only as a sanity check."
+        )
+    return results
+
+
 def _print_results(table: pd.DataFrame, top: int = 12) -> None:
     print(f"champion odds (proportional knockout rule), top {top}:")
     print(f"  {'team':<16}{'champion':>10}{'final':>9}{'semi':>9}{'R16':>8}")
@@ -696,9 +858,14 @@ def _main() -> None:
 
     args = sys.argv[1:]
     if args and args[0] == "forward":
-        # `forward` -> backbone; `forward dc` -> Dixon-Coles goal model.
-        model_kind = "dixon_coles" if len(args) > 1 and args[1] in ("dc", "dixon_coles") else "backbone"
+        # `forward` -> backbone; `forward dc` -> goal model; `forward ens` -> ensemble.
+        kinds = {"dc": "dixon_coles", "dixon_coles": "dixon_coles", "ens": "ensemble", "ensemble": "ensemble"}
+        model_kind = kinds.get(args[1], "backbone") if len(args) > 1 else "backbone"
         run_forward(model_kind=model_kind)
+    elif args and args[0] in ("tune-xi", "tune_xi"):
+        tune_xi()
+    elif args and args[0] in ("tune-sigma", "tune_sigma"):
+        tune_strength_sigma()
     else:
         run_backtest()
 

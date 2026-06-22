@@ -1,6 +1,8 @@
 """Tests for the tournament simulator, using a stub predictor (no model needed)."""
 
 import numpy as np
+import pandas as pd
+import pytest
 
 from sports_predictor.soccer.simulation import (
     monte_carlo,
@@ -108,3 +110,76 @@ def _soft_favorite_lookup(x, y):
     d = (STRENGTH[x] - STRENGTH[y]) / 31.0  # in [-1, 1]
     p_x = 0.5 + 0.35 * d
     return (p_x, 0.0, 1.0 - p_x)
+
+
+def test_blend_pair_probabilities_endpoints_and_midpoint():
+    """Ensemble blend: endpoints recover each model; result stays a valid prob."""
+    from sports_predictor.soccer.simulation import blend_pair_probabilities
+
+    backbone = {("A", "B"): (0.6, 0.2, 0.2)}
+    dc = {("A", "B"): (0.2, 0.2, 0.6)}
+
+    # w_dc=0 -> backbone; w_dc=1 -> Dixon-Coles.
+    assert blend_pair_probabilities(backbone, dc, 0.0)[("A", "B")] == pytest.approx((0.6, 0.2, 0.2))
+    assert blend_pair_probabilities(backbone, dc, 1.0)[("A", "B")] == pytest.approx((0.2, 0.2, 0.6))
+
+    # w_dc=0.5 -> midpoint, and always a normalised probability triple.
+    mid = blend_pair_probabilities(backbone, dc, 0.5)[("A", "B")]
+    assert mid == pytest.approx((0.4, 0.2, 0.4))
+    assert sum(mid) == pytest.approx(1.0)
+
+
+# --------------------------------------------------------------------------- #
+# xi tuning: the World Cup finals slice the backtest scores on
+# --------------------------------------------------------------------------- #
+def _finals_frame():
+    """A tiny match log spanning two World Cups plus noise around them."""
+    return pd.DataFrame(
+        {
+            "date": pd.to_datetime(
+                [
+                    "2010-06-05",  # before WC2010 cutoff -> excluded
+                    "2010-06-12",  # WC2010 finals -> included
+                    "2010-07-10",  # WC2010 finals -> included
+                    "2010-09-01",  # after the 45-day window -> excluded
+                    "2011-03-01",  # a qualifier, not the finals -> excluded
+                    "2014-06-13",  # WC2014 finals -> included
+                ],
+                utc=True,
+            ),
+            "tournament": [
+                "FIFA World Cup",
+                "FIFA World Cup",
+                "FIFA World Cup",
+                "FIFA World Cup",
+                "FIFA World Cup qualification",
+                "FIFA World Cup",
+            ],
+            "result": ["H", "H", "D", "A", "H", "A"],
+        }
+    )
+
+
+def test_wc_finals_slice_keeps_only_post_cutoff_finals():
+    from sports_predictor.soccer.simulation import _wc_finals_slice
+
+    sliced = _wc_finals_slice(_finals_frame(), "2010-06-11", days=45)
+    # Only the two finals matches inside the 45-day window after the cutoff.
+    assert list(pd.to_datetime(sliced["date"]).dt.strftime("%Y-%m-%d")) == [
+        "2010-06-12",
+        "2010-07-10",
+    ]
+    # The pre-cutoff friendly, the late match, and the qualifier are all dropped.
+    assert (sliced["tournament"] == "FIFA World Cup").all()
+
+
+def test_wc_finals_slice_is_leakage_safe_per_tournament():
+    from sports_predictor.soccer.simulation import _wc_finals_slice
+
+    # Scoring the 2014 World Cup must never pull in 2010 matches, and every
+    # returned match kicks off on or after the cutoff (so a model fit strictly
+    # before the cutoff has not seen it).
+    cutoff = pd.Timestamp("2014-06-12", tz="UTC")
+    sliced = _wc_finals_slice(_finals_frame(), cutoff, days=45)
+    assert len(sliced) == 1
+    assert (pd.to_datetime(sliced["date"]) >= cutoff).all()
