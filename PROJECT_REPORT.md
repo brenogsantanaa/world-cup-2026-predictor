@@ -561,3 +561,15 @@ World Cup slice. Wired into the simulator as a selectable engine
 Spain (17.1%), with Brazil third (9.5%) — the goal model rewards the South-American
 attacking sides and tempers the backbone's Spain-heaviness. Adds 4 blend tests +
 the existing Dixon-Coles tests. Full suite: **156 passing**.
+
+**Negative result — match-importance weighting on the goal model.** Tried the
+obvious next lever: weight each match in the Dixon-Coles likelihood by its
+competition tier (Elo's K-factor, friendly ≈ 1/3 of a World Cup match) so noisy
+friendlies count less. It **hurt**: Dixon-Coles WC-finals log loss 1.0025 →
+1.0177, and the best ensemble 0.9878 → 0.9913. International data is already
+sparse; downweighting friendlies shrinks the effective sample and adds estimation
+noise, while time-decay already captures recency. Reverted — not kept even
+off-by-default, since (unlike FIFA features or the confederation diagnostic) it
+carries no redeeming signal. Another entry in the project's recurring theme: *more
+model machinery rarely beats the Elo+form backbone; the ensemble blend is the
+exception because it adds a genuinely decorrelated view, not more of the same.*
