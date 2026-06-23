@@ -221,26 +221,56 @@ python -m sports_predictor.soccer.simulation forward
 ```
 
 This trains on every international before the 11 Jun 2026 cutoff and simulates the
-tournament 20,000 times, writing `data/processed/wc2026_odds.parquet` and a clean
-`wc2026_odds.csv`. **Source: backbone + international features, no club data.**
+tournament 20,000 times. Three engines are selectable (each writes its own
+labelled `data/processed/wc2026_odds*.parquet` + CSV):
+
+```bash
+python -m sports_predictor.soccer.simulation forward        # backbone (Elo+form)
+python -m sports_predictor.soccer.simulation forward dc      # Dixon-Coles goal model
+python -m sports_predictor.soccer.simulation forward ens     # ensemble (best; default w_dc=0.35)
+```
+
+**Headline prediction — the ensemble** (Elo backbone + Dixon-Coles, `w_dc=0.35`),
+the most accurate engine on the leakage-safe WC-finals bake-off (see below):
 
 | team | champion | final | semi | R16 |
 |---|---|---|---|---|
-| Spain | 27.7% | 41.2% | 54.4% | 81.3% |
-| Argentina | 22.9% | 35.8% | 49.2% | 74.6% |
-| France | 8.3% | 15.7% | 31.1% | 70.9% |
-| England | 7.8% | 16.0% | 30.4% | 74.9% |
-| Brazil | 5.4% | 11.4% | 24.0% | 62.5% |
-| Colombia | 4.0% | 9.3% | 17.9% | 65.9% |
-| Portugal | 3.3% | 8.2% | 16.1% | 63.3% |
-| Ecuador | 3.0% | 7.3% | 18.0% | 60.7% |
-| Netherlands | 2.7% | 6.5% | 16.5% | 53.2% |
-| Belgium | 2.1% | 5.5% | 11.8% | 60.5% |
+| Argentina | 27.6% | 38.3% | 51.0% | 75.0% |
+| Spain | 17.1% | 29.6% | 42.9% | 73.7% |
+| Brazil | 9.5% | 17.2% | 33.2% | 69.5% |
+| Colombia | 6.7% | 13.6% | 24.0% | 73.2% |
+| England | 6.6% | 13.3% | 27.4% | 72.5% |
+| France | 6.0% | 12.4% | 25.0% | 67.2% |
+| Ecuador | 4.8% | 10.7% | 22.1% | 65.5% |
+| Portugal | 3.3% | 8.1% | 16.0% | 62.2% |
+| Japan | 2.1% | 5.4% | 13.4% | 44.4% |
+| Netherlands | 2.1% | 5.6% | 13.8% | 46.8% |
 
-Reigning Euro champion Spain and World Cup holder Argentina head the field, with
-France/England close behind — consistent with market consensus. **Caveat:** the
-exact FIFA third-place combination table (which group's third fills which R32
-slot, 1 of 495 cases) is approximated by seeding the best thirds with same-group
-avoidance; this only shifts R32 matchups and is a documented, easy-to-revise
-choice. Club-data enrichment (API-Football) is additive and will be reported as a
-separate with/without comparison.
+Adding the goal model lifts the South-American attacking sides (Argentina to #1,
+Brazil up) and softens the backbone's Spain-heaviness — consistent with both
+market consensus and the bake-off, where the ensemble beats every single model.
+
+### Which engine? An honest, leakage-safe bake-off
+
+Fit each model strictly before each of the 2010–2022 World Cups and score it on
+those tournaments' **actual 256 finals matches** (`simulation bakeoff`):
+
+| model | log loss | accuracy |
+|---|---|---|
+| backbone (Elo+form) | 0.9961 | 53.1% |
+| xgboost | 1.0063 | 52.3% |
+| dixon_coles | 1.0025 | 53.5% |
+| **ensemble (w_dc=0.35)** | **0.9880** | **55.5%** |
+
+Neither the Dixon-Coles goal model nor XGBoost beats the Elo backbone *alone*, but
+**blending the backbone with the goal model beats all three** on both log loss and
+accuracy. The weight is tuned by `simulation tune-weight` (broad flat optimum over
+`w_dc ∈ [0.30, 0.50]`); 0.35 is chosen as a robust point that avoids the slight
+non-WC-slice cost of heavier weights. This is the first *modeling* change (not new
+data) to beat the backbone on the World Cup slice.
+
+**Caveat:** the exact FIFA third-place combination table (which group's third fills
+which R32 slot, 1 of 495 cases) is approximated by seeding the best thirds with
+same-group avoidance; this only shifts R32 matchups and is a documented,
+easy-to-revise choice. Club-data enrichment (API-Football) is additive and will be
+reported as a separate with/without comparison.

@@ -584,7 +584,10 @@ WC2026_ODDS_CSV = "wc2026_odds.csv"
 WC2026_LABELS = {
     "backbone": "backbone (Elo + form) + international features, no club data",
     "dixon_coles": "Dixon-Coles goal model (attack/defense, time-decay), no club data",
-    "ensemble": "ensemble: Elo backbone + Dixon-Coles goal model (50/50), no club data",
+    "ensemble": (
+        f"ensemble: Elo backbone + Dixon-Coles goal model "
+        f"(w_dc={DEFAULT_ENSEMBLE_W_DC:g}, tuned on past WC finals), no club data"
+    ),
 }
 
 

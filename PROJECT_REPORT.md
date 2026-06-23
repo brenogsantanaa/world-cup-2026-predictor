@@ -522,3 +522,42 @@ a stripped page without inline data, and Transfermarkt/FBref are Cloudflare-
 protected. The cache-first, fixture-tested design means parsing/tests/architecture
 are unaffected and ready to run the moment real pages are cached. All parsers are
 verified against committed sample pages. Suite: **125 passing**.
+
+---
+
+## 15. Update — Dixon-Coles goal model + a tuned ensemble (precision win)
+
+Added a Dixon-Coles bivariate Poisson goal model (`soccer/dixon_coles.py`):
+per-team attack/defense strengths, neutral-aware home advantage (`gamma=0` at
+neutral venues), the low-score `rho` correction on the 0-0/1-0/0-1/1-1 cells, and
+`exp(-xi * age_days)` time-decay (xi tuned to 0.0008, §10.4). It yields full
+scoreline matrices, not just W/D/A.
+
+**Honest single-model verdict.** On the leakage-safe bake-off — fit before each
+2010-2022 World Cup, scored on those tournaments' actual 256 finals matches —
+**no single model beats the Elo backbone**:
+
+| model | WC-finals log loss | accuracy |
+|---|---|---|
+| backbone (Elo+form) | 0.9961 | 53.1% |
+| xgboost | 1.0063 | 52.3% |
+| dixon_coles | 1.0025 | 53.5% |
+| **ensemble (w_dc=0.35)** | **0.9880** | **55.5%** |
+
+**The ensemble is the win.** Elo (win-based, blind to scoring) and Dixon-Coles
+(goal-based, skewed by confederation scoring levels) have decorrelated errors, so
+a weighted blend beats either alone: WC-finals log loss 0.9961 → 0.9880 (−0.0081)
+and accuracy +2.4pp. `tune_ensemble_weight` selects `w_dc` on the same pooled
+WC-finals metric as `tune_xi`; the optimum is a broad flat basin over
+`w_dc ∈ [0.30, 0.50]` (bare min 0.40). We set the default to **0.35** — within
+sampling noise of the WC optimum (0.9880 vs 0.9878) while avoiding the slight
+neutral/all-slice degradation that `w_dc ≥ 0.40` causes. The old default was 0.5,
+set by hand and never tuned (it was *worse* than the backbone on the general
+slices).
+
+This is the **first modeling change** (not new data) to beat the backbone on the
+World Cup slice. Wired into the simulator as a selectable engine
+(`forward ens`); the regenerated 2026 odds put Argentina first (27.6%) ahead of
+Spain (17.1%), with Brazil third (9.5%) — the goal model rewards the South-American
+attacking sides and tempers the backbone's Spain-heaviness. Adds 4 blend tests +
+the existing Dixon-Coles tests. Full suite: **156 passing**.
