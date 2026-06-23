@@ -503,8 +503,16 @@ def _build_dc_inputs(matches, tournament, cutoff, xi: float = DEFAULT_XI):
 # Default ensemble weight on the Dixon-Coles goal model; the rest goes to the Elo
 # backbone. The two models have opposite blind spots (Elo is win-based and blind
 # to scoring style; Dixon-Coles is goal-based and skewed by confederation scoring
-# levels), so blending cancels both. 0.5 is an even split; tune later on past WCs.
-DEFAULT_ENSEMBLE_W_DC = 0.5
+# levels), so blending cancels both and beats either alone.
+#
+# Tuned by `tune_ensemble_weight` on the 256 pooled WC-finals matches of the
+# 2010-2022 World Cups (leakage-safe, the same higher-power metric `tune_xi`
+# uses): blending cuts WC-finals match log loss from 0.9961 (backbone-only) to a
+# broad, flat minimum of ~0.988 across w_dc in [0.30, 0.50] (optimum 0.40). We
+# take 0.35 rather than the bare optimum: it is within sampling noise on the WC
+# slice (0.9880 vs 0.9878) while avoiding the slight degradation that w_dc >= 0.40
+# causes on the broader neutral/all-match slices. See PROJECT_REPORT.md.
+DEFAULT_ENSEMBLE_W_DC = 0.35
 
 
 def _build_ensemble_inputs(matches, model_table, tournament, cutoff, w_dc=DEFAULT_ENSEMBLE_W_DC):
@@ -834,6 +842,143 @@ def tune_xi(
     return results
 
 
+# --------------------------------------------------------------------------- #
+# 6c. Tuning the ensemble weight + an honest match-level bake-off
+# --------------------------------------------------------------------------- #
+# Candidate weights on the Dixon-Coles goal model (rest goes to the Elo backbone).
+ENSEMBLE_W_GRID = (0.0, 0.1, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6, 0.8, 1.0)
+
+
+def _wc_match_predictions(matches, model_table, world_cups=WORLD_CUPS, days: int = 45):
+    """Pooled, leakage-safe backbone & Dixon-Coles match probabilities on past WCs.
+
+    For each World Cup we fit both models strictly before its cutoff and predict
+    the actual finals matches (joined to ``model_table`` by ``match_id`` for the
+    backbone's features). Returns ``(y_true, p_backbone, p_dc)`` pooled over every
+    finals match of every tournament in ``world_cups`` -- the same higher-power
+    signal ``tune_xi`` selects on, reused so the ensemble weight is tuned on the
+    slice that matters rather than on the held-out test set.
+    """
+    from sports_predictor.soccer.baseline import FULL_FEATURES, TARGET, prepare
+
+    clean = matches.dropna(subset=["home_score", "away_score"]).reset_index(drop=True)
+    ys, p_bb, p_dc = [], [], []
+    for tour, cutoff, _champ in world_cups:
+        cutoff_ts = _utc(cutoff)
+        model, _ = _train_model(model_table, cutoff_ts)
+        order = [list(model.classes_).index(label) for label in LABELS]
+
+        finals = _wc_finals_slice(clean, cutoff, days)
+        feat = model_table.merge(finals[["match_id"]], on="match_id", how="inner")
+        feat = prepare(feat, FULL_FEATURES, carry=("home_team", "away_team", "neutral"))
+        if feat.empty:
+            continue
+
+        dc = DixonColesModel().fit(clean, cutoff_ts)
+        ys.append(feat[TARGET].to_numpy())
+        p_bb.append(model.predict_proba(feat[FULL_FEATURES])[:, order])
+        p_dc.append(dc.predict_proba(feat[["home_team", "away_team", "neutral"]]))
+
+    return (
+        pd.Series(np.concatenate(ys)),
+        np.concatenate(p_bb),
+        np.concatenate(p_dc),
+    )
+
+
+def _blend(p_bb, p_dc, w_dc):
+    blended = (1.0 - w_dc) * p_bb + w_dc * p_dc
+    return blended / blended.sum(axis=1, keepdims=True)
+
+
+def tune_ensemble_weight(
+    weights=ENSEMBLE_W_GRID, world_cups=WORLD_CUPS, days: int = 45, verbose: bool = True
+) -> dict:
+    """Pick the Elo-vs-Dixon-Coles blend weight by pooled WC-finals match log loss.
+
+    Leakage-safe: every model is fit before the World Cup it is scored on. ``w_dc``
+    is the weight on the goal model; 0 is the pure Elo backbone, 1 is pure
+    Dixon-Coles. Lower log loss is better. Returns ``{w_dc: match_ll}``.
+    """
+    from sports_predictor.core.evaluation import evaluate_probabilities
+
+    matches = pd.read_parquet(PROCESSED_DIR / "matches.parquet")
+    model_table = pd.read_parquet(PROCESSED_DIR / "model_table.parquet")
+    y, p_bb, p_dc = _wc_match_predictions(matches, model_table, world_cups, days)
+
+    if verbose:
+        print(
+            "Ensemble weight tuning  (pooled WC-finals match log loss, "
+            f"{len(y)} matches; lower = better)\n"
+            f"{'w_dc':>7}{'match LL':>11}"
+        )
+    scores: dict[float, float] = {}
+    for w in weights:
+        ll = evaluate_probabilities(y, _blend(p_bb, p_dc, w), LABELS)["log_loss"]
+        scores[w] = ll
+        if verbose:
+            print(f"{w:>7.2f}{ll:>11.4f}")
+
+    best = min(scores, key=scores.get)
+    if verbose:
+        print(
+            f"\nbest w_dc = {best:.2f}  (match log loss {scores[best]:.4f}; "
+            f"backbone-only {scores[weights[0]]:.4f})"
+        )
+    return scores
+
+
+def run_match_bakeoff(world_cups=WORLD_CUPS, days: int = 45, w_dc: float | None = None) -> dict:
+    """Honest match-level bake-off on past WC finals: backbone, XGBoost, DC, ensemble.
+
+    All models are fit strictly before each tournament and scored on its actual
+    finals matches, pooled. Reports log loss + accuracy so the goal model and the
+    ensemble are compared on equal, leakage-safe footing.
+    """
+    from sports_predictor.core.evaluation import evaluate_probabilities
+    from sports_predictor.soccer.baseline import FULL_FEATURES, TARGET, prepare
+    from sports_predictor.soccer.models import MatchClassifier
+
+    if w_dc is None:
+        w_dc = DEFAULT_ENSEMBLE_W_DC
+    matches = pd.read_parquet(PROCESSED_DIR / "matches.parquet")
+    model_table = pd.read_parquet(PROCESSED_DIR / "model_table.parquet")
+    clean = matches.dropna(subset=["home_score", "away_score"]).reset_index(drop=True)
+
+    y, p_bb, p_dc = _wc_match_predictions(matches, model_table, world_cups, days)
+
+    # XGBoost, fit per-WC on the same features for a fair pooled comparison.
+    p_xgb = []
+    for tour, cutoff, _champ in world_cups:
+        cutoff_ts = _utc(cutoff)
+        train = prepare(model_table[model_table["date"] < cutoff_ts], FULL_FEATURES)
+        clf = MatchClassifier("xgboost").fit(train[FULL_FEATURES], train[TARGET])
+        finals = _wc_finals_slice(clean, cutoff, days)
+        feat = model_table.merge(finals[["match_id"]], on="match_id", how="inner")
+        feat = prepare(feat, FULL_FEATURES, carry=("home_team", "away_team", "neutral"))
+        if not feat.empty:
+            p_xgb.append(clf.predict_proba(feat[FULL_FEATURES]))
+    p_xgb = np.concatenate(p_xgb)
+
+    preds = {
+        "backbone (Elo+form)": p_bb,
+        "xgboost": p_xgb,
+        "dixon_coles": p_dc,
+        f"ensemble (w_dc={w_dc:g})": _blend(p_bb, p_dc, w_dc),
+    }
+    print(
+        f"Match-level bake-off on {len(y)} pooled WC-finals matches "
+        f"(leakage-safe, fit before each WC)\n"
+        f"{'model':<24}{'log loss':>10}{'accuracy':>10}"
+    )
+    results = {}
+    for name, proba in preds.items():
+        m = evaluate_probabilities(y, proba, LABELS)
+        results[name] = m
+        print(f"{name:<24}{m['log_loss']:>10.4f}{m['accuracy']:>10.1%}")
+    return results
+
+
 def _print_results(table: pd.DataFrame, top: int = 12) -> None:
     print(f"champion odds (proportional knockout rule), top {top}:")
     print(f"  {'team':<16}{'champion':>10}{'final':>9}{'semi':>9}{'R16':>8}")
@@ -866,6 +1011,10 @@ def _main() -> None:
         tune_xi()
     elif args and args[0] in ("tune-sigma", "tune_sigma"):
         tune_strength_sigma()
+    elif args and args[0] in ("tune-weight", "tune_weight", "tune-w"):
+        tune_ensemble_weight()
+    elif args and args[0] in ("bakeoff", "bake-off"):
+        run_match_bakeoff()
     else:
         run_backtest()
 

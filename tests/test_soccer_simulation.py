@@ -5,6 +5,9 @@ import pandas as pd
 import pytest
 
 from sports_predictor.soccer.simulation import (
+    DEFAULT_ENSEMBLE_W_DC,
+    _blend,
+    blend_pair_probabilities,
     monte_carlo,
     perturbed_lookup,
     play_tie,
@@ -183,3 +186,39 @@ def test_wc_finals_slice_is_leakage_safe_per_tournament():
     sliced = _wc_finals_slice(_finals_frame(), cutoff, days=45)
     assert len(sliced) == 1
     assert (pd.to_datetime(sliced["date"]) >= cutoff).all()
+
+
+# --------------------------------------------------------------------------- #
+# Ensemble blend (Elo backbone + Dixon-Coles)
+# --------------------------------------------------------------------------- #
+def test_blend_endpoints_recover_each_model():
+    p_bb = np.array([[0.6, 0.3, 0.1], [0.2, 0.3, 0.5]])
+    p_dc = np.array([[0.4, 0.4, 0.2], [0.1, 0.2, 0.7]])
+    # w_dc = 0 -> pure backbone; w_dc = 1 -> pure Dixon-Coles.
+    np.testing.assert_allclose(_blend(p_bb, p_dc, 0.0), p_bb)
+    np.testing.assert_allclose(_blend(p_bb, p_dc, 1.0), p_dc)
+
+
+def test_blend_rows_sum_to_one_and_interpolate():
+    p_bb = np.array([[0.6, 0.3, 0.1]])
+    p_dc = np.array([[0.2, 0.2, 0.6]])
+    out = _blend(p_bb, p_dc, 0.5)
+    assert out.shape == (1, 3)
+    np.testing.assert_allclose(out.sum(axis=1), [1.0])
+    # The blended away-win prob sits strictly between the two inputs.
+    assert p_bb[0, 2] < out[0, 2] < p_dc[0, 2]
+
+
+def test_blend_pair_probabilities_renormalises():
+    backbone = {("A", "B"): (0.5, 0.3, 0.2)}
+    dc = {("A", "B"): (0.3, 0.3, 0.4)}
+    blended = blend_pair_probabilities(backbone, dc, 0.35)
+    assert abs(sum(blended[("A", "B")]) - 1.0) < 1e-12
+    # Each component is the weighted average of the two sources (pre-norm here
+    # already sums to 1, so no renormalisation distortion).
+    assert blended[("A", "B")][0] == pytest.approx(0.65 * 0.5 + 0.35 * 0.3)
+
+
+def test_tuned_default_weight_is_in_calibrated_basin():
+    # Guards against an accidental revert to the old, mis-tuned 0.5 default.
+    assert 0.25 <= DEFAULT_ENSEMBLE_W_DC <= 0.45
