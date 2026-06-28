@@ -72,6 +72,38 @@ DEFAULT_MAX_AGE_YEARS = 12.0
 MAX_GOALS = 10  # scoreline grid size for deriving outcome probabilities
 RHO_BOUND = 0.25  # keep the low-score correction in a stable range
 
+# Competition importance. Time decay already makes recent matches matter more,
+# but a friendly and a World Cup game played the same week should NOT count the
+# same: the World Cup result is a truer read of current form against real
+# opposition. Each match's likelihood weight is multiplied by this factor (on top
+# of the time-decay weight), so the ongoing 2026 World Cup games -- being both the
+# most recent AND the highest importance -- carry the most signal, while a 2014
+# World Cup match is still pulled back down by age.
+DEFAULT_IMPORTANCE = {
+    "world_cup": 3.0,    # FIFA World Cup finals (incl. the live 2026 games)
+    "major": 2.0,        # continental finals: Euro, Copa America, AFCON, Asian Cup, Gold Cup
+    "competitive": 1.3,  # qualifiers, Nations League, smaller cups
+    "friendly": 1.0,     # baseline
+}
+_MAJOR_FINALS = (
+    "uefa euro", "copa américa", "copa america", "african cup of nations",
+    "afc asian cup", "gold cup", "confederations cup",
+)
+
+
+def _classify_tournament(name) -> str:
+    """Map a ``tournament`` label to an importance tier (see DEFAULT_IMPORTANCE)."""
+    t = str(name).lower()
+    if "friendly" in t:
+        return "friendly"
+    if "qualification" in t or "qualifier" in t:
+        return "competitive"
+    if t == "fifa world cup":
+        return "world_cup"
+    if any(m in t for m in _MAJOR_FINALS):
+        return "major"
+    return "competitive"
+
 
 def _utc(ts) -> pd.Timestamp:
     t = pd.Timestamp(ts)
@@ -119,6 +151,7 @@ class DixonColesModel:
 
     xi: float = DEFAULT_XI
     max_age_years: float = DEFAULT_MAX_AGE_YEARS
+    importance_weights: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_IMPORTANCE))
     attack: dict[str, float] = field(default_factory=dict)
     defense: dict[str, float] = field(default_factory=dict)
     gamma: float = 0.0
@@ -152,7 +185,17 @@ class DixonColesModel:
         hf = (~window["neutral"].astype(bool)).to_numpy().astype(float)  # 1 if real home
 
         age_days = (cutoff_ts - _utc_series(window["date"])).dt.total_seconds().to_numpy() / 86400.0
-        weight = np.exp(-self.xi * age_days)
+        decay = np.exp(-self.xi * age_days)
+        # Competition-importance multiplier: a World Cup game outweighs a friendly
+        # of the same age, so the current tournament dominates the form read.
+        if "tournament" in window.columns:
+            importance = (
+                window["tournament"].map(_classify_tournament).map(self.importance_weights).to_numpy(dtype=float)
+            )
+            importance = np.where(np.isnan(importance), 1.0, importance)
+        else:
+            importance = np.ones_like(decay)
+        weight = importance * decay
 
         # Parameter vector: attack[1..T-1] (attack[0] = -sum, enforces sum=0),
         # defense[0..T-1], gamma, rho.
