@@ -22,7 +22,6 @@ exist before kickoff.
 
 - `data/raw/`: original downloaded data, cached verbatim with an as-of date.
 - `data/processed/`: cleaned tables built from raw data.
-- `notebooks/`: guided exploration.
 - `src/sports_predictor/core/`: sport-agnostic ML utilities (splitting, training,
   evaluation, simulation).
 - `src/sports_predictor/soccer/`: soccer data ingestion, team-name mapping, and
@@ -128,19 +127,19 @@ features only.
       (optimal temperature ≈ 1 on every slice), so the tournament overconfidence is
       *structural*. Added per-simulation **team strength-uncertainty perturbation**
       (`strength_sigma`) and calibrated it over the 2010–2022 World Cups by champion
-      log loss. See `core/calibration.py`, `soccer/simulation.py`, PROJECT_REPORT.md.
+      log loss. See `core/calibration.py`, `soccer/simulation.py`, PROJECT_REPORT.md §4.
 - [x] Goalscorer-derived player signal (`goalscorers.csv`) — ingested + a
-      leakage-safe player-profile layer (`soccer/player_features.py`). Honest
-      backtest verdict: it does **not** improve the neutral/WC slices (overlaps
-      with team form/Elo), so it's **off by default**. See PROJECT_REPORT.md §11.
+      leakage-safe player-profile layer (`soccer/player_features.py`). Backtest
+      verdict: it does **not** improve the neutral/WC slices (overlaps
+      with team form/Elo), so it's **off by default**. See PROJECT_REPORT.md §6.
 - [x] Cross-confederation Elo bias check (`soccer/confederation_bias.py`) —
       CONMEBOL is **not** overrated (UEFA well-calibrated); the weaker pools
       (OFC/AFC/CONCACAF) are, but correcting it doesn't generalise to World Cup
-      predictions, so it's left out. See PROJECT_REPORT.md §12.
+      predictions, so it's left out. See PROJECT_REPORT.md §7.
 - [x] FIFA-ranking as-of-match-date features (`soccer/fifa_ranking.py`,
       `soccer/fifa_features.py`) — leakage-safe `merge_asof`. **Improves the
       World Cup slice** (−0.0050 log loss), flat on neutral. Off by default only
-      because the source ends mid-2018 (no live 2026 coverage). See §13.
+      because the source ends mid-2018 (no live 2026 coverage). See PROJECT_REPORT.md §8.
 - [x] Broad-data foundation: **canonical reconciliation layer**
       (`canonical/`) + cache-first scrapers (`scrapers/`) for **Understat**,
       **Transfermarkt**, and **FBref**, each built incrementally end-to-end
@@ -250,7 +249,7 @@ Adding the goal model lifts the South-American attacking sides (Argentina to #1,
 Brazil up) and softens the backbone's Spain-heaviness — consistent with both
 market consensus and the bake-off, where the ensemble beats every single model.
 
-### Which engine? An honest, leakage-safe bake-off
+### Which engine? A leakage-safe bake-off
 
 Fit each model strictly before each of the 2010–2022 World Cups and score it on
 those tournaments' **actual 256 finals matches** (`simulation bakeoff`):
